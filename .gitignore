@@ -3,8 +3,10 @@
 Package.resolved
 .DS_Store
 .env
-*.xcodeproj
-*.xcworkspace
+
+# Xcode per-user state. Shared scheme lives under xcshareddata/ and IS tracked.
+xcuserdata/
+*.xcuserstate
 
 # Xcode build output (xcodebuild -derivedDataPath build)
 build/

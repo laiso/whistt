@@ -2,38 +2,88 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag for the release (e.g. v0.1.0)'
+        description: 'Tag (e.g. v0.1.0). Skips auto-versioning.'
         required: true
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  release:
     runs-on: macos-latest
     timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide if release is needed
+        id: gate
+        run: |
+          LATEST_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+          LATEST_TAG=${LATEST_TAG:-v0.0.0}
+          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+
+          # Manual dispatch always runs.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "reason=manual" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Skip if no source files changed since the previous release tag.
+          if [ "$LATEST_TAG" = "v0.0.0" ]; then
+            CHANGED="all (no previous tag)"
+          else
+            CHANGED=$(git diff --name-only "$LATEST_TAG"..HEAD)
+          fi
+          if echo "$CHANGED" | grep -qE '^(Whistt/Whistt/.*\.swift|Whistt/Whistt\.xcodeproj/.*|Package\.swift|Tools/.*\.swift|Tests/.*\.swift|Whistt/Whistt/Assets\.xcassets/.*)$' \
+             || [ "$LATEST_TAG" = "v0.0.0" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=docs-only" >> "$GITHUB_OUTPUT"
+            echo "::notice::No source changes since $LATEST_TAG — skipping release."
+          fi
+
+      - name: Compute next version
+        if: steps.gate.outputs.skip != 'true'
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LATEST_TAG="${{ steps.gate.outputs.latest_tag }}"
+          VER=${LATEST_TAG#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VER"
+
+          # PR merges produce commit messages like "Merge pull request #N from ..." (merge commit)
+          # or "Title (#N)" (squash). Either => minor bump. Direct pushes => patch bump.
+          MSG=$(git log -1 --pretty=%B HEAD)
+          if printf '%s' "$MSG" | grep -qE '^Merge pull request #[0-9]+|\(#[0-9]+\)'; then
+            NEW="v$MAJOR.$((MINOR + 1)).0"
+            echo "bump=minor" >> "$GITHUB_OUTPUT"
+          else
+            NEW="v$MAJOR.$MINOR.$((PATCH + 1))"
+            echo "bump=patch" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$NEW" >> "$GITHUB_OUTPUT"
+          echo "::notice::Bumping $LATEST_TAG -> $NEW"
 
       - uses: maxim-lobanov/setup-xcode@v1
+        if: steps.gate.outputs.skip != 'true'
         with:
           xcode-version: latest-stable
 
-      - name: Resolve version tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build Release
+        if: steps.gate.outputs.skip != 'true'
         run: |
           cd Whistt
           xcodebuild \
@@ -47,40 +97,41 @@ jobs:
             build
 
       - name: Package .app into zip
+        if: steps.gate.outputs.skip != 'true'
         id: package
         run: |
-          VERSION="${{ steps.tag.outputs.value }}"
+          VERSION="${{ steps.version.outputs.tag }}"
           ARTIFACT="Whistt-${VERSION}.zip"
           cd Whistt/build/Build/Products/Release
-          # ditto preserves resource forks / extended attributes correctly for .app bundles.
           ditto -c -k --sequesterRsrc --keepParent Whistt.app "../../../../${ARTIFACT}"
           echo "path=Whistt/${ARTIFACT}" >> "$GITHUB_OUTPUT"
           echo "name=${ARTIFACT}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.skip != 'true'
         with:
           name: ${{ steps.package.outputs.name }}
           path: ${{ steps.package.outputs.path }}
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: steps.gate.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.value }}
+          tag_name: ${{ steps.version.outputs.tag }}
           files: ${{ steps.package.outputs.path }}
           generate_release_notes: true
           body: |
             ## Install
 
-            Whistt is distributed **unsigned**. Follow these steps:
+            > ⚠️ Whistt is distributed **unsigned**. Double-clicking the .app will show *"Apple could not verify Whistt is free of malware"*. Use one of the bypass steps below.
 
-            1. Download `${{ steps.package.outputs.name }}` below and double-click to unzip.
-            2. Drag `Whistt.app` to `/Applications/`.
-            3. Remove the Gatekeeper quarantine attribute:
-               ```bash
-               xattr -dr com.apple.quarantine /Applications/Whistt.app
-               ```
-            4. Launch Whistt, paste your OpenAI API key, and grant Microphone + Accessibility permissions in System Settings.
+            1. Download `${{ steps.package.outputs.name }}` and unzip.
+            2. Move `Whistt.app` to `/Applications/`.
+            3. Bypass Gatekeeper — pick one:
+               - **Terminal**: `xattr -dr com.apple.quarantine /Applications/Whistt.app`
+               - **GUI**: System Settings → Privacy & Security → scroll to the "Whistt was blocked" row → **Open Anyway**
+            4. Launch Whistt, paste your OpenAI API key (issue one at https://platform.openai.com/api-keys), and grant **Microphone** + **Accessibility** permissions in System Settings.
+            5. Hold ⌥+Space, speak, release — text appears at your cursor.
 
             See the [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full usage.
