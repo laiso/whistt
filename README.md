@@ -2,8 +2,7 @@
 
 Hold **⌥ Option + Space** to talk; speech is streamed to OpenAI's Realtime transcription API and the resulting text is typed at the current cursor position.
 
-<video src="assets/demo.mov" controls width="720" muted></video>
-<!-- Place the screen recording at assets/demo.mov (rename from "Screen Recording 2026-05-15 at 16.11.12.mov"). GitHub's README renders <video> inline. -->
+![demo](assets/demo.gif)
 
 Menu Bar app. Native Swift / AVFoundation / URLSessionWebSocketTask — no third-party deps.
 
