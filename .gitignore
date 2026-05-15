@@ -1,0 +1,13 @@
+.build/
+.swiftpm/
+Package.resolved
+.DS_Store
+.env
+*.xcodeproj
+*.xcworkspace
+
+# Xcode build output (xcodebuild -derivedDataPath build)
+build/
+
+# Local recordings / scratch
+*.mov
