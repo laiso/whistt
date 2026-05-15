@@ -66,6 +66,8 @@ final class HotKeyManager {
     var onStart: (() -> Void)?
     var onStop: (() -> Void)?
 
+    var isRunning: Bool { eventTap != nil }
+
     func updateHotKey(_ newValue: HotKey) {
         if keyActive {
             keyActive = false

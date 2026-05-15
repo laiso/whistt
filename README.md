@@ -27,9 +27,19 @@ Switch between **Type at cursor** / **Clipboard** output and pick a transcriptio
 <img src="assets/menu-bar.png" alt="Menu bar dropdown" width="500">
 
 
+## Install from GitHub Release (unsigned)
+
+Releases are distributed **unsigned**, so the first launch from `/Applications/` will be blocked by Gatekeeper. Two ways to bypass:
+
+- **Terminal**: `xattr -dr com.apple.quarantine /Applications/Whistt.app`
+- **GUI**: open System Settings → Privacy & Security, scroll to the "Whistt was blocked to protect your Mac" row and click **Open Anyway**.
+
+  <img src="assets/open-anyway.png" alt="Open Anyway button in Privacy & Security" width="500">
+
 ## Troubleshooting
 
 - **No text appears** — Accessibility permission isn't granted to `Whistt.app`.
+- **Space leaks into the focused app** — Accessibility wasn't granted yet; the app auto-recovers within ~2 s after granting (no relaunch needed since v0.1.1).
 - **Key dialog reappears** — the Keychain entry is missing or empty; paste the key again.
 
 ## More

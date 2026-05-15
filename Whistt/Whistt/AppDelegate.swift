@@ -98,8 +98,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         hotKey.start()
+        if !hotKey.isRunning {
+            setStatusIcon(.warning)
+        }
 
         ensureAccessibility()
+        startAccessibilityWatchdog()
+    }
+
+    private func startAccessibilityWatchdog() {
+        // Until Accessibility is granted, CGEvent.tapCreate fails silently and ⌥+Space leaks
+        // through to the focused app. Poll until granted, then retry the tap — avoids the
+        // "must relaunch after granting" footgun.
+        guard !hotKey.isRunning else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self = self else { return }
+            if self.hotKey.isRunning { return }
+            if AXIsProcessTrusted() {
+                self.hotKey.start()
+                if self.hotKey.isRunning {
+                    self.setStatusIcon(.idle)
+                    return
+                }
+            }
+            self.startAccessibilityWatchdog()
+        }
     }
 
     private func rebuildAgent() {
