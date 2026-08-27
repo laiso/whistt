@@ -6,9 +6,10 @@ enum OutputMode: String {
     case clipboard
 }
 
-private enum StatusIcon {
+private enum StatusIcon: Equatable {
     case idle
     case active
+    case processing
     case warning
 }
 
@@ -17,17 +18,22 @@ private enum StatusIcon {
 // returns the entire transcript at commit time.
 private struct ModelGroup {
     let title: String
+    let provider: TranscriptionProvider
+    let streamsDeltas: Bool
     let models: [String]
 }
 
 private let modelGroups: [ModelGroup] = [
-    ModelGroup(title: "Realtime (streaming deltas)", models: [
+    ModelGroup(title: "OpenAI — streaming deltas", provider: .openAI, streamsDeltas: true, models: [
         "gpt-realtime-whisper",
     ]),
-    ModelGroup(title: "Final-only (no deltas)", models: [
+    ModelGroup(title: "OpenAI — final only", provider: .openAI, streamsDeltas: false, models: [
         "gpt-4o-transcribe",
         "gpt-4o-mini-transcribe",
         "whisper-1",
+    ]),
+    ModelGroup(title: "Google Gemini — final only", provider: .gemini, streamsDeltas: false, models: [
+        "gemini-3.5-transcribe-live",
     ]),
 ]
 
@@ -39,7 +45,6 @@ private func groupTitle(forModel name: String) -> String? {
 }
 
 private let modelDefaultsKey = "WHISTT_MODEL"
-private let apiKeyKeychainAccount = "OPENAI_API_KEY"
 private let envMigrationNoticeKey = "WHISTT_ENV_MIGRATION_NOTICE_SHOWN"
 private let shortcutKeyCodeDefaultsKey = "WHISTT_SHORTCUT_KEYCODE"
 private let shortcutModifiersDefaultsKey = "WHISTT_SHORTCUT_MODIFIERS"
@@ -61,20 +66,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var apiKey: String?
     private var currentModel: String = ""
     private var currentHotKey: HotKey = defaultHotKey
+    private var currentStatusIcon: StatusIcon = .idle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
 
-        guard let key = resolveAPIKey() else {
-            NSApp.terminate(nil)
-            return
-        }
-
-        self.apiKey = key
-
         let savedModel = UserDefaults.standard.string(forKey: modelDefaultsKey)
         let envModel = EnvLoader.value(for: "WHISTT_MODEL")
         currentModel = savedModel ?? envModel ?? defaultModel
+        self.apiKey = resolveAPIKey(for: currentProvider)
 
         if let kc = UserDefaults.standard.object(forKey: shortcutKeyCodeDefaultsKey) as? NSNumber,
            let mods = UserDefaults.standard.object(forKey: shortcutModifiersDefaultsKey) as? NSNumber {
@@ -87,14 +87,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotKey.onStart = { [weak self] in
             DispatchQueue.main.async {
-                self?.setStatusIcon(.active)
-                self?.agent?.start()
+                guard let self else { return }
+                guard let agent = self.agent else {
+                    self.setStatusIcon(.warning)
+                    return
+                }
+                self.setStatusIcon(.active)
+                agent.start()
             }
         }
         hotKey.onStop = { [weak self] in
             DispatchQueue.main.async {
-                self?.setStatusIcon(.idle)
-                self?.agent?.stop()
+                guard let self else { return }
+                guard let agent = self.agent else {
+                    self.setStatusIcon(.warning)
+                    return
+                }
+                let awaitingFinal = agent.stop()
+                self.setStatusIcon(awaitingFinal ? .processing : .idle)
+                // Network failures already switch to warning. This fallback prevents a
+                // permanently spinning state if a provider closes without a final event.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+                    guard let self, self.currentStatusIcon == .processing else { return }
+                    self.setStatusIcon(.idle)
+                }
             }
         }
         hotKey.start()
@@ -129,9 +145,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         agent?.stop()
         guard let key = apiKey else {
             agent = nil
+            setStatusIcon(.warning)
             return
         }
-        let agent = WhisperNativeAgent(apiKey: key, model: currentModel)
+        let agent = WhisperNativeAgent(apiKey: key, model: currentModel, provider: currentProvider)
         agent.onTranscriptDelta = { [weak self] delta in
             DispatchQueue.main.async { self?.handle(delta: delta) }
         }
@@ -159,9 +176,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleFinal(_ full: String) {
-        if outputMode == .clipboard {
+        switch outputMode {
+        case .typing where !currentModelStreamsDeltas:
+            TypingEmulator.type(full)
+        case .clipboard:
             ClipboardOutput.set(full)
+        case .typing:
+            // Streaming models have already typed every delta; typing the final again
+            // would duplicate the transcript.
+            break
         }
+        if currentStatusIcon != .active { setStatusIcon(.idle) }
     }
 
     private func setupStatusItem() {
@@ -170,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setStatusIcon(_ icon: StatusIcon) {
+        currentStatusIcon = icon
         guard let button = statusItem.button else { return }
         let symbolName: String
         let tint: NSColor?
@@ -180,6 +206,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .active:
             symbolName = "mic.fill"
             tint = .systemRed
+        case .processing:
+            symbolName = "ellipsis.circle.fill"
+            tint = .systemBlue
         case .warning:
             symbolName = "exclamationmark.triangle.fill"
             tint = .systemOrange
@@ -249,13 +278,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let setKeyItem = NSMenuItem(title: "Set API Key…", action: #selector(setAPIKey(_:)), keyEquivalent: "")
-        setKeyItem.target = self
-        menu.addItem(setKeyItem)
+        for provider in [TranscriptionProvider.openAI, .gemini] {
+            let label = provider == .openAI ? "OpenAI" : "Gemini"
+            let setKeyItem = NSMenuItem(title: "Set \(label) API Key…", action: #selector(setAPIKey(_:)), keyEquivalent: "")
+            setKeyItem.target = self
+            setKeyItem.representedObject = provider.rawValue
+            menu.addItem(setKeyItem)
 
-        let clearKeyItem = NSMenuItem(title: "Clear API Key", action: #selector(clearAPIKey(_:)), keyEquivalent: "")
-        clearKeyItem.target = self
-        menu.addItem(clearKeyItem)
+            let clearKeyItem = NSMenuItem(title: "Clear \(label) API Key", action: #selector(clearAPIKey(_:)), keyEquivalent: "")
+            clearKeyItem.target = self
+            clearKeyItem.representedObject = provider.rawValue
+            menu.addItem(clearKeyItem)
+        }
 
         menu.addItem(.separator())
 
@@ -268,22 +302,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    private func resolveAPIKey() -> String? {
-        if let raw = ProcessInfo.processInfo.environment[apiKeyKeychainAccount] {
+    private var currentProvider: TranscriptionProvider {
+        modelGroups.first { $0.models.contains(currentModel) }?.provider ?? .openAI
+    }
+
+    private var currentModelStreamsDeltas: Bool {
+        modelGroups.first { $0.models.contains(currentModel) }?.streamsDeltas ?? false
+    }
+
+    private func resolveAPIKey(for provider: TranscriptionProvider, promptIfMissing: Bool = true) -> String? {
+        let account = provider.apiKeyAccount
+        if let raw = ProcessInfo.processInfo.environment[account] {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { return trimmed }
         }
-        if let stored = KeychainStore.value(for: apiKeyKeychainAccount) {
+        if let stored = KeychainStore.value(for: account) {
             return stored
         }
-        if let legacy = EnvLoader.value(for: apiKeyKeychainAccount) {
-            if KeychainStore.set(legacy, for: apiKeyKeychainAccount) {
-                WhisttLog.event("migrated \(apiKeyKeychainAccount) from .env to Keychain")
+        if let legacy = EnvLoader.value(for: account) {
+            if KeychainStore.set(legacy, for: account) {
+                WhisttLog.event("migrated \(account) from .env to Keychain")
                 showMigrationNoticeIfNeeded()
             }
             return legacy
         }
-        return promptForAPIKey(initial: nil)
+        return promptIfMissing ? promptForAPIKey(provider: provider, initial: nil) : nil
     }
 
     private func showMigrationNoticeIfNeeded() {
@@ -292,19 +335,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.showAlert(
                 title: "API key moved to Keychain",
-                message: "OPENAI_API_KEY was copied from your .env into the macOS Keychain. You can remove the line from .env — Whistt will not read it again."
+                message: "An API key was copied from your .env into the macOS Keychain. You can remove that entry from .env."
             )
         }
     }
 
-    private func promptForAPIKey(initial: String?) -> String? {
+    private func promptForAPIKey(provider: TranscriptionProvider, initial: String?) -> String? {
         let alert = NSAlert()
-        alert.messageText = "OpenAI API Key"
-        alert.informativeText = "Paste your OpenAI API key. It will be stored in the macOS Keychain."
+        let label = provider == .openAI ? "OpenAI" : "Gemini"
+        alert.messageText = "\(label) API Key"
+        alert.informativeText = "Paste your \(label) API key. It will be stored in the macOS Keychain."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        field.placeholderString = "sk-..."
+        field.placeholderString = provider == .openAI ? "sk-..." : "Gemini API key"
         if let initial = initial { field.stringValue = initial }
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
@@ -313,7 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
         if value == initial { return value }
-        if !KeychainStore.set(value, for: apiKeyKeychainAccount) {
+        if !KeychainStore.set(value, for: provider.apiKeyAccount) {
             showAlert(title: "Failed to save API key",
                       message: "Could not write to the macOS Keychain.")
             return nil
@@ -322,26 +366,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func setAPIKey(_ sender: NSMenuItem) {
-        guard let newKey = promptForAPIKey(initial: apiKey), newKey != apiKey else { return }
-        apiKey = newKey
-        rebuildAgent()
+        guard let raw = sender.representedObject as? String,
+              let provider = TranscriptionProvider(rawValue: raw) else { return }
+        let existing = resolveAPIKey(for: provider, promptIfMissing: false)
+        guard let newKey = promptForAPIKey(provider: provider, initial: existing), newKey != existing else { return }
+        if provider == currentProvider {
+            apiKey = newKey
+            rebuildAgent()
+        }
         setStatusIcon(.idle)
     }
 
     @objc private func clearAPIKey(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let provider = TranscriptionProvider(rawValue: raw) else { return }
+        let label = provider == .openAI ? "OpenAI" : "Gemini"
         let alert = NSAlert()
-        alert.messageText = "Clear API key?"
-        alert.informativeText = "The key will be removed from the macOS Keychain. Use Set API Key… to enter a new key without relaunching."
+        alert.messageText = "Clear \(label) API key?"
+        alert.informativeText = "The key will be removed from the macOS Keychain."
         alert.addButton(withTitle: "Clear")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        _ = KeychainStore.delete(for: apiKeyKeychainAccount)
+        _ = KeychainStore.delete(for: provider.apiKeyAccount)
         // Drop the agent immediately; the user explicitly revoked the key, so any in-flight
         // transcript draining over the 3s grace is acceptable to lose.
-        agent?.stop()
-        agent = nil
-        apiKey = nil
-        setStatusIcon(.warning)
+        if provider == currentProvider {
+            agent?.stop()
+            agent = nil
+            apiKey = nil
+            setStatusIcon(.warning)
+        }
         rebuildMenu()
     }
 
@@ -350,6 +404,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WhisttLog.event("switching model: \(currentModel) -> \(name)")
         currentModel = name
         UserDefaults.standard.set(name, forKey: modelDefaultsKey)
+        apiKey = resolveAPIKey(for: currentProvider)
         rebuildAgent()
         rebuildMenu()
     }
