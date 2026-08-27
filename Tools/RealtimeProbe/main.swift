@@ -2,24 +2,41 @@ import Foundation
 import WhisttCore
 
 let model = EnvLoader.value(for: "WHISTT_MODEL") ?? "gpt-realtime-whisper"
-guard let apiKey = EnvLoader.value(for: "OPENAI_API_KEY") else {
-    FileHandle.standardError.write("OPENAI_API_KEY not found in env or .env\n".data(using: .utf8)!)
-    exit(2)
-}
+let apiKey = EnvLoader.value(for: "OPENAI_API_KEY")
+let subscriptionAccessToken = EnvLoader.value(for: "CHATGPT_ACCESS_TOKEN")
+    ?? EnvLoader.value(for: "OPENAI_OAUTH_ACCESS_TOKEN")
 
 let waitSeconds: TimeInterval = TimeInterval(
     ProcessInfo.processInfo.environment["PROBE_WAIT"].flatMap(Double.init) ?? 10
 )
 let mode = ProcessInfo.processInfo.environment["PROBE_MODE"] ?? "ek-bearer-nada"
+let mintAuth = ProcessInfo.processInfo.environment["MINT_AUTH"] ?? "api-key"
+
+// Report the auth the selected mode actually uses, not which tokens happen to exist.
+let authLabel: String = {
+    if mode.hasPrefix("oauth-") { return "chatgpt-oauth" }
+    if mode.hasPrefix("ek-") { return "ephemeral-key(mint=\(mintAuth))" }
+    if mode.hasPrefix("api-session") { return "api-key(mint=\(mintAuth))" }
+    return "api-key"
+}()
 
 print("[probe] mode=\(mode) model=\(model)")
+print("[probe] auth=\(authLabel)")
 
 // MARK: - Mint
 func mint() throws -> (token: String, sid: String) {
     let url = URL(string: "https://api.openai.com/v1/realtime/client_secrets")!
     var req = URLRequest(url: url)
     req.httpMethod = "POST"
-    req.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    let bearer: String?
+    switch mintAuth {
+    case "oauth", "chatgpt-oauth": bearer = subscriptionAccessToken
+    default: bearer = apiKey
+    }
+    guard let bearer = bearer else {
+        throw NSError(domain: "mint", code: -2, userInfo: [NSLocalizedDescriptionKey: "\(mintAuth) token is required for client_secret mint modes"])
+    }
+    req.addValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
     req.addValue("application/json", forHTTPHeaderField: "Content-Type")
     let body: [String: Any] = [
         "session": [
@@ -46,8 +63,19 @@ func mint() throws -> (token: String, sid: String) {
     return (token, sid)
 }
 
-let (ek, sid) = (try? mint()) ?? ("", "")
-print("[probe] mint: ek=<redacted len=\(ek.count)> sid=\(sid)")
+let needsEphemeralKey = mode.hasPrefix("ek-") || mode.hasPrefix("api-session")
+let (ek, sid): (String, String)
+if needsEphemeralKey {
+    do {
+        (ek, sid) = try mint()
+    } catch {
+        FileHandle.standardError.write("mint failed for mode=\(mode): \(error.localizedDescription)\n".data(using: .utf8)!)
+        exit(2)
+    }
+    print("[probe] mint: ek=<redacted len=\(ek.count)> sid=\(sid)")
+} else {
+    (ek, sid) = ("", "")
+}
 
 // MARK: - Stdout-safe formatters
 //
@@ -74,6 +102,20 @@ func redactedProtocols(_ protocols: [String]?) -> [String] {
 
 // MARK: - Build URL/auth per mode
 let (urlStr, headers, protocols): (String, [(String,String)], [String]?) = {
+    func requireAPIKey() -> String {
+        guard let apiKey = apiKey else {
+            FileHandle.standardError.write("OPENAI_API_KEY is required for mode=\(mode)\n".data(using: .utf8)!)
+            exit(2)
+        }
+        return apiKey
+    }
+    func requireSubscriptionToken() -> String {
+        guard let token = subscriptionAccessToken else {
+            FileHandle.standardError.write("CHATGPT_ACCESS_TOKEN or OPENAI_OAUTH_ACCESS_TOKEN is required for mode=\(mode)\n".data(using: .utf8)!)
+            exit(2)
+        }
+        return token
+    }
     switch mode {
     case "ek-bearer-nada":
         return ("wss://api.openai.com/v1/realtime", [("Authorization","Bearer \(ek)")], nil)
@@ -90,22 +132,34 @@ let (urlStr, headers, protocols): (String, [(String,String)], [String]?) = {
         return ("wss://api.openai.com/v1/realtime?client_secret=\(ek)", [], nil)
     case "api-intent":
         return ("wss://api.openai.com/v1/realtime?intent=transcription",
-                [("Authorization","Bearer \(apiKey)")], nil)
+                [("Authorization","Bearer \(requireAPIKey())")], nil)
     case "api-model":
         return ("wss://api.openai.com/v1/realtime?model=\(model)",
-                [("Authorization","Bearer \(apiKey)")], nil)
+                [("Authorization","Bearer \(requireAPIKey())")], nil)
     case "api-session":
         return ("wss://api.openai.com/v1/realtime?session=\(sid)",
-                [("Authorization","Bearer \(apiKey)")], nil)
+                [("Authorization","Bearer \(requireAPIKey())")], nil)
     case "api-session_id":
         return ("wss://api.openai.com/v1/realtime?session_id=\(sid)",
-                [("Authorization","Bearer \(apiKey)")], nil)
+                [("Authorization","Bearer \(requireAPIKey())")], nil)
     case "api-modelintent":
         return ("wss://api.openai.com/v1/realtime?intent=transcription&model=\(model)",
-                [("Authorization","Bearer \(apiKey)")], nil)
+                [("Authorization","Bearer \(requireAPIKey())")], nil)
+    case "oauth-nada":
+        return ("wss://api.openai.com/v1/realtime",
+                [("Authorization","Bearer \(requireSubscriptionToken())")], nil)
+    case "oauth-model":
+        return ("wss://api.openai.com/v1/realtime?model=\(model)",
+                [("Authorization","Bearer \(requireSubscriptionToken())")], nil)
+    case "oauth-intent":
+        return ("wss://api.openai.com/v1/realtime?intent=transcription",
+                [("Authorization","Bearer \(requireSubscriptionToken())")], nil)
+    case "oauth-modelintent":
+        return ("wss://api.openai.com/v1/realtime?intent=transcription&model=\(model)",
+                [("Authorization","Bearer \(requireSubscriptionToken())")], nil)
     default:
         return ("wss://api.openai.com/v1/realtime",
-                [("Authorization","Bearer \(apiKey)")], nil)
+                [("Authorization","Bearer \(requireAPIKey())")], nil)
     }
 }()
 
