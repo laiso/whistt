@@ -84,4 +84,5 @@ It reads `GEMINI_API_KEY` through `EnvLoader`, never prints the credential, and 
 ## More
 
 - Architecture & module layout → `ARCHITECTURE.md`.
+- Manual acceptance tests and automation status → `docs/acceptance/`.
 - Key sources (env var override, legacy `.env` migration), advanced model notes → ARCHITECTURE.md "Design highlights".
