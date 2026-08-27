@@ -4,30 +4,32 @@ import AVFoundation
 final class WhisperNativeAgent: NSObject {
     private let audioEngine = AVAudioEngine()
     private var ws: RealtimeWS?
+    private var geminiWS: GeminiLiveWS?
     private var converter: AVAudioConverter?
-    private let targetFormat = AVAudioFormat(
-        commonFormat: .pcmFormatInt16,
-        sampleRate: 24000,
-        channels: 1,
-        interleaved: true
-    )!
+    private let targetFormat: AVAudioFormat
     private let apiKey: String
     private let model: String
+    private let provider: TranscriptionProvider
     private var isRunning = false
     private let bytesLock = NSLock()
     private var _bytesSent = 0
     private var lastDeliveredTranscript: String?
-    // 100ms of pcm16/24kHz mono = 24000 * 0.1 * 2 bytes = 4800
-    private static let minCommitBytes = 4800
-    private static let finalGraceSeconds: TimeInterval = 3.0
+    private static let finalGraceSeconds: TimeInterval = 5.0
 
     var onTranscriptDelta: ((String) -> Void)?
     var onTranscriptComplete: ((String) -> Void)?
     var onError: ((String) -> Void)?
 
-    init(apiKey: String, model: String = "gpt-realtime-whisper") {
+    init(apiKey: String, model: String = "gpt-realtime-whisper", provider: TranscriptionProvider = .openAI) {
         self.apiKey = apiKey
         self.model = model
+        self.provider = provider
+        self.targetFormat = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: provider == .gemini ? 16_000 : 24_000,
+            channels: 1,
+            interleaved: true
+        )!
     }
 
     func start() {
@@ -52,8 +54,9 @@ final class WhisperNativeAgent: NSObject {
         }
     }
 
-    func stop() {
-        guard isRunning else { return }
+    @discardableResult
+    func stop() -> Bool {
+        guard isRunning else { return false }
         isRunning = false
         audioEngine.inputNode.removeTap(onBus: 0)
         if audioEngine.isRunning {
@@ -62,23 +65,37 @@ final class WhisperNativeAgent: NSObject {
         converter = nil
 
         let bytes = bytesSent()
-        if bytes >= Self.minCommitBytes {
-            ws?.sendCommit()
+        let minBytes = Int(targetFormat.sampleRate * 0.1) * MemoryLayout<Int16>.size
+        let awaitsFinalTranscript = bytes >= minBytes
+        if awaitsFinalTranscript {
+            if provider == .gemini {
+                geminiWS?.sendActivityEnd()
+            } else {
+                ws?.sendCommit()
+            }
         } else {
-            WhisttLog.event("skipped commit: only \(bytes) bytes (need ≥\(Self.minCommitBytes))")
+            WhisttLog.event("skipped finish: only \(bytes) bytes (need ≥\(minBytes))")
         }
 
         // Capture the WS locally so a subsequent start() can't have its fresh socket
         // closed by this deferred teardown.
         let closing = ws
+        let closingGemini = geminiWS
         ws = nil
+        geminiWS = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.finalGraceSeconds) {
             closing?.close()
+            closingGemini?.close()
         }
+        return awaitsFinalTranscript
     }
 
     private func connect() {
-        WhisttLog.event("connecting (model=\(model))")
+        WhisttLog.event("connecting (provider=\(provider.rawValue), model=\(model))")
+        if provider == .gemini {
+            connectGemini()
+            return
+        }
         // The URL is ?intent=transcription and session.type is "transcription" — passing
         // ?model=<transcription-model> is rejected because the URL's model param is the
         // *realtime conversational* model. Our transcription model goes only in
@@ -92,6 +109,40 @@ final class WhisperNativeAgent: NSObject {
         }
         self.ws = ws
         ws.connect()
+    }
+
+    private func connectGemini() {
+        let socket = GeminiLiveWS(apiKey: apiKey, model: model)
+        socket.onEvent = { [weak self] event in
+            DispatchQueue.main.async { self?.handleGemini(event) }
+        }
+        socket.onError = { [weak self] message in
+            DispatchQueue.main.async { self?.onError?(message) }
+        }
+        geminiWS = socket
+        socket.connect()
+        // GeminiLiveWS queues this and all early audio until setupComplete, keeping
+        // each push-to-talk turn's pre-roll isolated inside its own socket.
+        socket.sendActivityStart()
+    }
+
+    private func handleGemini(_ event: GeminiLiveEvent) {
+        switch event {
+        case .setupComplete:
+            WhisttLog.event("Gemini setup complete")
+        case .interimTranscript(let text):
+            // Gemini interim results are replacement hypotheses, not append-only deltas.
+            WhisttLog.debugEvent("gemini.interim chars=\(text.count)")
+        case .finalTranscript(let text):
+            WhisttLog.final(text)
+            deliverComplete(text)
+        case .turnComplete:
+            WhisttLog.event("Gemini turn complete")
+        case .error(let message):
+            onError?("Gemini: \(message)")
+        case .unknown:
+            WhisttLog.debugEvent("gemini.unknown")
+        }
     }
 
     private func handle(_ event: RealtimeEvent) {
@@ -195,7 +246,11 @@ final class WhisperNativeAgent: NSObject {
 
     private func sendAudio(_ data: Data) {
         addBytes(data.count)
-        ws?.sendAudio(data)
+        if provider == .gemini {
+            geminiWS?.sendAudio(data)
+        } else {
+            ws?.sendAudio(data)
+        }
     }
 
     private func addBytes(_ n: Int) {

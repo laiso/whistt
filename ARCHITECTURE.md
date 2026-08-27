@@ -1,25 +1,29 @@
 # Whistt Architecture
 
-Internal architecture of the Whistt push-to-talk app for macOS, built on the OpenAI Realtime WebSocket.
+Internal architecture of the Whistt push-to-talk app for macOS, built on the OpenAI Realtime and Google Gemini Live WebSocket APIs.
 
 ## 1. Module layout
 
-SwiftPM provides the `WhisttCore` library and the `realtime-probe` CLI; the Xcode `Whistt` app shares its common logic through `WhisttCore`. Tests and the CLI only consume the pure-Foundation portion that does not touch AVFoundation/AppKit.
+SwiftPM provides the `WhisttCore` library and provider-specific probe CLIs; the Xcode `Whistt` app shares the same common source files. Tests and CLIs only consume the pure-Foundation portion that does not touch AVFoundation/AppKit.
 
 ```mermaid
 flowchart TB
     subgraph SPM["Package.swift (SwiftPM)"]
         direction TB
         Core["WhisttCore<br/>(library)"]
-        Probe["realtime-probe<br/>(executable)"]
+        OpenAIProbe["realtime-probe<br/>(executable)"]
+        GeminiProbe["gemini-live-probe<br/>(executable)"]
     end
 
     subgraph CoreFiles["WhisttCore sources (pure Foundation)"]
         direction TB
         EnvLoader["EnvLoader.swift"]
         Keychain["KeychainStore.swift"]
+        Provider["TranscriptionProvider.swift"]
         Proto["RealtimeProtocol.swift"]
         WS["RealtimeWS.swift"]
+        GeminiProto["GeminiLiveProtocol.swift"]
+        GeminiWS["GeminiLiveWS.swift"]
     end
 
     subgraph App["Whistt macOS app (Xcode target)"]
@@ -36,10 +40,12 @@ flowchart TB
         direction TB
         EnvTests["EnvLoaderTests"]
         ProtoTests["RealtimeProtocolTests"]
+        GeminiProtoTests["GeminiLiveProtocolTests"]
     end
 
     Core --> CoreFiles
-    Probe --> Core
+    OpenAIProbe --> Core
+    GeminiProbe --> Core
     App --> CoreFiles
     Tests --> Core
 ```
@@ -58,9 +64,12 @@ flowchart TB
     AVEng["AVAudioEngine<br/>+ AVAudioConverter"]
     WS["RealtimeWS"]
     Proto["RealtimeProtocol<br/>encode / decode"]
+    GeminiWS["GeminiLiveWS"]
+    GeminiProto["GeminiLiveProtocol<br/>encode / decode"]
     Typing["TypingEmulator<br/>CGEvent unicode"]
     Clipboard["ClipboardOutput<br/>NSPasteboard"]
     OpenAI[(OpenAI Realtime WS<br/>wss://...?intent=transcription)]
+    Gemini[(Gemini Live WS<br/>BidiGenerateContent)]
 
     WhisttApp -- "@NSApplicationDelegateAdaptor" --> AppDelegate
     User -- "⌥+Space hold/release" --> HotKey
@@ -73,6 +82,9 @@ flowchart TB
     WS <-- "append / commit / session events" --> OpenAI
     WS -. "RealtimeEvent.decode" .-> Proto
     Proto -.-> Agent
+    Agent -- "pcm16 / 16kHz / activity start-end" --> GeminiWS
+    GeminiWS -. "setup / realtimeInput / serverContent" .-> GeminiProto
+    GeminiWS <--> Gemini
     Agent -- "onTranscriptDelta" --> AppDelegate
     Agent -- "onTranscriptComplete" --> AppDelegate
     Agent -- "onError" --> AppDelegate
@@ -132,7 +144,7 @@ sequenceDiagram
     else too short
         Note over WA: skip commit
     end
-    Note over WA,WS: close WS after 3s grace
+    Note over WA,WS: close WS after 5s grace
 ```
 
 ## 4. WhisttCore boundary (testable line)
@@ -145,8 +157,11 @@ flowchart LR
         direction TB
         Env["EnvLoader"]
         Kchn["KeychainStore<br/>(Security framework)"]
+        Provider["TranscriptionProvider"]
         ProtoTypes["RealtimeProtocol<br/>• RealtimeOutgoingType<br/>• RealtimeIncomingType<br/>• RealtimeSessionUpdate<br/>• RealtimeMessage (encode)<br/>• RealtimeEvent (decode)"]
         WSC["RealtimeWS<br/>(URLSessionWebSocketTask)"]
+        GeminiProto["GeminiLiveProtocol<br/>• GeminiLiveMessage<br/>• GeminiLiveEvent"]
+        GeminiWSC["GeminiLiveWS<br/>(URLSessionWebSocketTask)"]
     end
 
     subgraph AppOnly["app-only (Xcode target)"]
@@ -159,13 +174,15 @@ flowchart LR
         A6["WhisttLog"]
     end
 
-    subgraph ProbeCLI["realtime-probe CLI"]
-        Main["Tools/RealtimeProbe/main.swift"]
+    subgraph ProbeCLI["Probe CLIs"]
+        OpenAIMain["Tools/RealtimeProbe/main.swift"]
+        GeminiMain["Tools/GeminiLiveProbe/main.swift"]
     end
 
     subgraph T["Tests/WhisttCoreTests"]
         T1["EnvLoaderTests"]
         T2["RealtimeProtocolTests"]
+        T3["GeminiLiveProtocolTests"]
     end
 
     AppOnly -- "import WhisttCore" --> Core
@@ -175,11 +192,14 @@ flowchart LR
 
 ## Design highlights
 
-- **Three products**: macOS app proper / `WhisttCore` library / `realtime-probe` CLI. The shared logic (`EnvLoader` / `KeychainStore` / `RealtimeProtocol` / `RealtimeWS`) is extracted into WhisttCore so it can be reused by the CLI and unit tests.
-- **API key storage**: The app uses `KeychainStore` (generic-password, service `so.lai.whistt`, account `OPENAI_API_KEY`) as the primary source. Lookup order: `ProcessInfo` env > Keychain > legacy `.env` (auto-migrated into the Keychain on first launch, with a one-time notice shown to the user) > re-entry dialog from the menu bar. The CLI / tests continue to read `.env` via `EnvLoader` (the CLI is unsigned and cannot access the app's Keychain entry).
+- **Products**: macOS app proper / `WhisttCore` library / OpenAI `realtime-probe` / `gemini-live-probe`. Pure-Foundation protocol logic is shared by the app, probes, and unit tests.
+- **API key storage**: The app uses `KeychainStore` (generic-password, service `so.lai.whistt`) with separate `OPENAI_API_KEY` and `GEMINI_API_KEY` accounts. Lookup order is process environment > Keychain > legacy `.env` migration > provider-specific prompt. CLI probes use `.env` through `EnvLoader` because unsigned CLIs cannot share the app's Keychain entry.
 - **Input trigger**: `HotKeyManager` watches ⌥+Space through `CGEventTap` (`cgSessionEventTap` + `headInsertEventTap`). The Space key is swallowed so it never leaks to the frontmost app.
 - **Audio path**: Microphone → `AVAudioEngine.inputNode` tap → `AVAudioConverter` to pcm16/24kHz/mono → base64 → `input_audio_buffer.append` over `RealtimeWS` at 10–20 messages/s. `audioAppend` is on the hot path, so it builds the JSON via string interpolation instead of `JSONSerialization`.
+- **Provider-specific audio**: OpenAI receives PCM16/24kHz/mono. Gemini receives little-endian PCM16/16kHz/mono with `audio/pcm;rate=16000`; the converter target follows the selected provider.
+- **Gemini push-to-talk**: `GeminiLiveWS` sends manual-VAD `activityStart` and `activityEnd`. Messages created before `setupComplete` are queued inside that socket, preserving the start of speech and isolating quickly repeated push-to-talk turns.
+- **Gemini result semantics**: `interimInputTranscription` is a revisable snapshot, not an append-only delta, so it is logged but not typed. Only `inputTranscription` finalized segments reach the output sink. Both text and binary WebSocket response frames are decoded.
 - **WS protocol**: Endpoint is `wss://api.openai.com/v1/realtime?intent=transcription`. The URL `model=` query parameter targets *conversation* models, so we do not use it; the transcription model goes into `session.audio.input.transcription.model`. `turn_detection: null` forces manual commit.
-- **Stop handling**: `audioEngine.stop()` → if at least 4800 bytes (≈100ms) have been sent, emit `input_audio_buffer.commit`. The WS is closed after a 3-second grace period to allow the final transcript to arrive.
+- **Stop handling**: `audioEngine.stop()` → if at least 100ms has been sent, OpenAI emits `input_audio_buffer.commit` and Gemini emits `activityEnd`. Sockets receive a 5-second grace period for the final transcript.
 - **Output modes**: Typing mode emits each delta into the frontmost app via `CGEvent` Unicode input. Clipboard mode writes only the final transcript to `NSPasteboard`, so clipboard-history tools don't capture intermediate state.
 - **Testability boundary**: AVFoundation / AppKit code lives in the app target; only pure-Foundation code is separated into WhisttCore. This is what enables both `swift test` and CLI validation.
