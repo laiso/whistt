@@ -93,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 self.setStatusIcon(.active)
+                SoundFeedback.playRecordingStarted()
                 agent.start()
             }
         }

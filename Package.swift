@@ -23,7 +23,8 @@ let package = Package(
                 "HotKeyManager.swift",
                 "WhisperNativeAgent.swift",
                 "TypingEmulator.swift",
-                "WhisttLog.swift"
+                "WhisttLog.swift",
+                "SoundFeedback.swift"
             ],
             sources: [
                 "EnvLoader.swift",
