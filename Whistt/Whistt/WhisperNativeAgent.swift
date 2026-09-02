@@ -3,8 +3,7 @@ import AVFoundation
 
 final class WhisperNativeAgent: NSObject {
     private let audioEngine = AVAudioEngine()
-    private var ws: RealtimeWS?
-    private var geminiWS: GeminiLiveWS?
+    private var transport: TranscriptionTransport?
     private var converter: AVAudioConverter?
     private let targetFormat: AVAudioFormat
     private let apiKey: String
@@ -24,9 +23,11 @@ final class WhisperNativeAgent: NSObject {
         self.apiKey = apiKey
         self.model = model
         self.provider = provider
+        let transport = TranscriptionTransportFactory.make(provider: provider, apiKey: apiKey, model: model)
+        self.transport = transport
         self.targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
-            sampleRate: provider == .gemini ? 16_000 : 24_000,
+            sampleRate: transport.sampleRate,
             channels: 1,
             interleaved: true
         )!
@@ -68,108 +69,55 @@ final class WhisperNativeAgent: NSObject {
         let minBytes = Int(targetFormat.sampleRate * 0.1) * MemoryLayout<Int16>.size
         let awaitsFinalTranscript = bytes >= minBytes
         if awaitsFinalTranscript {
-            if provider == .gemini {
-                geminiWS?.sendActivityEnd()
-            } else {
-                ws?.sendCommit()
-            }
+            transport?.endInput()
         } else {
             WhisttLog.event("skipped finish: only \(bytes) bytes (need ≥\(minBytes))")
         }
 
         // Capture the WS locally so a subsequent start() can't have its fresh socket
         // closed by this deferred teardown.
-        let closing = ws
-        let closingGemini = geminiWS
-        ws = nil
-        geminiWS = nil
+        let closing = transport
+        transport = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.finalGraceSeconds) {
             closing?.close()
-            closingGemini?.close()
         }
         return awaitsFinalTranscript
     }
 
     private func connect() {
         WhisttLog.event("connecting (provider=\(provider.rawValue), model=\(model))")
-        if provider == .gemini {
-            connectGemini()
-            return
+        // stop() releases the previous transport. A fresh start creates the selected
+        // provider's transport so delayed teardown can never close a new session.
+        if transport == nil {
+            transport = TranscriptionTransportFactory.make(provider: provider, apiKey: apiKey, model: model)
         }
-        // The URL is ?intent=transcription and session.type is "transcription" — passing
-        // ?model=<transcription-model> is rejected because the URL's model param is the
-        // *realtime conversational* model. Our transcription model goes only in
-        // audio.input.transcription.model. turn_detection: null gives us manual commit.
-        let ws = RealtimeWS(apiKey: apiKey, model: model)
-        ws.onEvent = { [weak self] event in
+        transport?.onEvent = { [weak self] event in
             DispatchQueue.main.async { self?.handle(event) }
         }
-        ws.onError = { [weak self] msg in
-            DispatchQueue.main.async { self?.onError?(msg) }
-        }
-        self.ws = ws
-        ws.connect()
-    }
-
-    private func connectGemini() {
-        let socket = GeminiLiveWS(apiKey: apiKey, model: model)
-        socket.onEvent = { [weak self] event in
-            DispatchQueue.main.async { self?.handleGemini(event) }
-        }
-        socket.onError = { [weak self] message in
+        transport?.onError = { [weak self] message in
             DispatchQueue.main.async { self?.onError?(message) }
         }
-        geminiWS = socket
-        socket.connect()
-        // GeminiLiveWS queues this and all early audio until setupComplete, keeping
-        // each push-to-talk turn's pre-roll isolated inside its own socket.
-        socket.sendActivityStart()
+        transport?.connect()
     }
 
-    private func handleGemini(_ event: GeminiLiveEvent) {
+    private func handle(_ event: TranscriptionTransportEvent) {
         switch event {
-        case .setupComplete:
-            WhisttLog.event("Gemini setup complete")
-        case .interimTranscript(let text):
-            // Gemini interim results are replacement hypotheses, not append-only deltas.
-            WhisttLog.debugEvent("gemini.interim chars=\(text.count)")
-        case .finalTranscript(let text):
+        case .ready:
+            WhisttLog.event("transport ready")
+        case .speechStarted:
+            WhisttLog.event("speech_started")
+        case .partial(let text, let replacesPrevious):
+            if replacesPrevious {
+                WhisttLog.debugEvent("replacement partial chars=\(text.count)")
+            } else {
+                WhisttLog.delta(text)
+                onTranscriptDelta?(text)
+            }
+        case .final(let text):
             WhisttLog.final(text)
             deliverComplete(text)
         case .turnComplete:
-            WhisttLog.event("Gemini turn complete")
-        case .error(let message):
-            onError?("Gemini: \(message)")
-        case .unknown:
-            WhisttLog.debugEvent("gemini.unknown")
-        }
-    }
-
-    private func handle(_ event: RealtimeEvent) {
-        switch event {
-        case .sessionCreated:
-            WhisttLog.event("session.created")
-            ws?.sendSessionUpdate()
-        case .sessionUpdated:
-            WhisttLog.event("session.updated (ready)")
-        case .speechStarted:
-            WhisttLog.event("speech_started")
-        case .bufferCommitted:
-            WhisttLog.event("committed")
-        case .delta(let text):
-            WhisttLog.delta(text)
-            onTranscriptDelta?(text)
-        case .finalTranscript(let text):
-            WhisttLog.final(text)
-            deliverComplete(text)
-        case .conversationItem(let transcripts):
-            // The same final transcript can arrive both as `*.completed` and embedded
-            // in a `conversation.item.added/done` payload — dedupe so output isn't doubled.
-            for t in transcripts { deliverComplete(t) }
-        case .transcriptionFailed(let code, let message):
-            onError?("transcription failed [\(code)]: \(message)")
-        case .error(let message):
-            onError?(message)
+            WhisttLog.event("turn complete")
         case .unknown(let type):
             WhisttLog.debugEvent(type)
         }
@@ -246,11 +194,7 @@ final class WhisperNativeAgent: NSObject {
 
     private func sendAudio(_ data: Data) {
         addBytes(data.count)
-        if provider == .gemini {
-            geminiWS?.sendAudio(data)
-        } else {
-            ws?.sendAudio(data)
-        }
+        transport?.sendAudio(data)
     }
 
     private func addBytes(_ n: Int) {

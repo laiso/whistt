@@ -1,6 +1,6 @@
 # Whistt — Mac native real-time voice input
 
-Hold **⌥ Option + Space** to talk; speech is streamed to OpenAI Realtime or Google Gemini Live Transcription and the resulting text is typed at the current cursor position.
+Hold **⌥ Option + Space** to talk; speech is streamed to OpenAI Realtime, Google Gemini Live Transcription, or Meta Muse Voice Transcribe and the resulting text is typed at the current cursor position.
 
 ![demo](assets/demo.gif)
 
@@ -15,12 +15,14 @@ Most voice-input apps hide the transcription model behind their service. Whistt 
 - macOS 26.2+ / Xcode 16+
 - At least one provider API key:
   - OpenAI API key with Realtime API access — <https://platform.openai.com/api-keys>
+  - Google Gemini API key with Live API access
+  - Meta Model API key with Muse Voice Transcribe access — <https://dev.meta.ai/>
   - Gemini API key — <https://aistudio.google.com/app/apikey>
 
 ## Run
 
 1. Open `Whistt/Whistt.xcodeproj` and ⌘R.
-2. Paste the selected provider's API key when prompted. OpenAI and Gemini keys are stored as separate entries in the macOS Keychain.
+2. Paste the selected provider's API key when prompted. OpenAI, Gemini, and Meta keys are stored as separate entries in the macOS Keychain.
 
    <img src="assets/api-key-dialog.png" alt="OpenAI API Key prompt" width="360">
 3. Grant **Microphone** + **Accessibility** permissions in System Settings, then relaunch.
@@ -30,7 +32,7 @@ Most voice-input apps hide the transcription model behind their service. Whistt 
 
 Switch between **Type at cursor** / **Clipboard** output and pick an OpenAI or Google Gemini transcription model from the menu bar. Gemini uses `gemini-3.5-transcribe-live`, Japanese (`ja-JP`), and manual push-to-talk VAD. Its interim hypotheses are not typed because they can revise earlier text; only finalized text is inserted.
 
-The menu provides independent **Set/Clear OpenAI API Key** and **Set/Clear Gemini API Key** actions. For local development, `OPENAI_API_KEY` and `GEMINI_API_KEY` can be supplied through process environment variables or `.env`; the selected provider's key is migrated to Keychain on first use.
+The menu provides independent **Set/Clear API Key** actions for OpenAI, Gemini, and Meta. For local development, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and `META_API_KEY` can be supplied through process environment variables or `.env`; the selected provider's key is migrated to Keychain on first use.
 
 <img src="assets/menu-bar.png" alt="Menu bar dropdown" width="500">
 
@@ -52,7 +54,7 @@ set +a
 .build/xcode/Build/Products/Debug/Whistt.app/Contents/MacOS/Whistt
 ```
 
-The process environment takes precedence over Keychain, so this launch method uses `OPENAI_API_KEY` and `GEMINI_API_KEY` from the repository's `.env`. Keep this terminal open while using Whistt; press `Ctrl-C` to stop it. The `.env` file must contain shell-compatible `KEY=value` entries and should have mode `600` (`chmod 600 .env`).
+The process environment takes precedence over Keychain, so this launch method uses provider keys from the repository's `.env`. Keep this terminal open while using Whistt; press `Ctrl-C` to stop it. The `.env` file must contain shell-compatible `KEY=value` entries and should have mode `600` (`chmod 600 .env`).
 
 
 ## Install from GitHub Release (unsigned)
@@ -80,6 +82,14 @@ swift run gemini-live-probe /path/to/audio.raw
 ```
 
 It reads `GEMINI_API_KEY` through `EnvLoader`, never prints the credential, and exits successfully only after receiving a finalized transcript.
+
+Meta's probe accepts raw PCM16LE, 24 kHz, mono audio and sends it at real-time pace:
+
+```bash
+swift run meta-live-probe /path/to/audio.raw
+```
+
+It reads `META_API_KEY` through `EnvLoader`, authenticates inside the WebSocket handshake, and sends `endStream` after the audio queue drains.
 
 ## More
 
