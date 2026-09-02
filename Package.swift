@@ -10,7 +10,8 @@ let package = Package(
     products: [
         .library(name: "WhisttCore", targets: ["WhisttCore"]),
         .executable(name: "realtime-probe", targets: ["RealtimeProbe"]),
-        .executable(name: "gemini-live-probe", targets: ["GeminiLiveProbe"])
+        .executable(name: "gemini-live-probe", targets: ["GeminiLiveProbe"]),
+        .executable(name: "meta-live-probe", targets: ["MetaLiveProbe"])
     ],
     targets: [
         .target(
@@ -30,10 +31,13 @@ let package = Package(
                 "EnvLoader.swift",
                 "KeychainStore.swift",
                 "TranscriptionProvider.swift",
+                "TranscriptionTransport.swift",
                 "RealtimeProtocol.swift",
                 "RealtimeWS.swift",
                 "GeminiLiveProtocol.swift",
-                "GeminiLiveWS.swift"
+                "GeminiLiveWS.swift",
+                "MetaTranscriptionProtocol.swift",
+                "MetaTranscriptionWS.swift"
             ]
         ),
         .executableTarget(
@@ -45,6 +49,11 @@ let package = Package(
             name: "GeminiLiveProbe",
             dependencies: ["WhisttCore"],
             path: "Tools/GeminiLiveProbe"
+        ),
+        .executableTarget(
+            name: "MetaLiveProbe",
+            dependencies: ["WhisttCore"],
+            path: "Tools/MetaLiveProbe"
         ),
         .testTarget(
             name: "WhisttCoreTests",

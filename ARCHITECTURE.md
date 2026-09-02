@@ -1,6 +1,6 @@
 # Whistt Architecture
 
-Internal architecture of the Whistt push-to-talk app for macOS, built on the OpenAI Realtime and Google Gemini Live WebSocket APIs.
+Internal architecture of the Whistt push-to-talk app for macOS, built on the OpenAI Realtime, Google Gemini Live, and Meta Muse Voice Transcribe WebSocket APIs.
 
 ## 1. Module layout
 
@@ -193,10 +193,12 @@ flowchart LR
 ## Design highlights
 
 - **Products**: macOS app proper / `WhisttCore` library / OpenAI `realtime-probe` / `gemini-live-probe`. Pure-Foundation protocol logic is shared by the app, probes, and unit tests.
-- **API key storage**: The app uses `KeychainStore` (generic-password, service `so.lai.whistt`) with separate `OPENAI_API_KEY` and `GEMINI_API_KEY` accounts. Lookup order is process environment > Keychain > legacy `.env` migration > provider-specific prompt. CLI probes use `.env` through `EnvLoader` because unsigned CLIs cannot share the app's Keychain entry.
+- **API key storage**: The app uses `KeychainStore` (generic-password, service `so.lai.whistt`) with separate `OPENAI_API_KEY`, `GEMINI_API_KEY`, and `META_API_KEY` accounts. Lookup order is process environment > Keychain > legacy `.env` migration > provider-specific prompt. CLI probes use `.env` through `EnvLoader` because unsigned CLIs cannot share the app's Keychain entry.
 - **Input trigger**: `HotKeyManager` watches ⌥+Space through `CGEventTap` (`cgSessionEventTap` + `headInsertEventTap`). The Space key is swallowed so it never leaks to the frontmost app.
 - **Audio path**: Microphone → `AVAudioEngine.inputNode` tap → `AVAudioConverter` to pcm16/24kHz/mono → base64 → `input_audio_buffer.append` over `RealtimeWS` at 10–20 messages/s. `audioAppend` is on the hot path, so it builds the JSON via string interpolation instead of `JSONSerialization`.
-- **Provider-specific audio**: OpenAI receives PCM16/24kHz/mono. Gemini receives little-endian PCM16/16kHz/mono with `audio/pcm;rate=16000`; the converter target follows the selected provider.
+- **Transport boundary**: `WhisperNativeAgent` owns microphone capture only. `TranscriptionTransport` implementations own provider connection, wire encoding, lifecycle, and event normalization.
+- **Provider-specific audio**: OpenAI receives PCM16/24kHz/mono. Gemini receives little-endian PCM16/16kHz/mono with `audio/pcm;rate=16000`. Meta receives binary PCM16LE/24kHz/mono frames paced by the live microphone. The converter target follows the selected transport.
+- **Meta lifecycle**: Meta authenticates in the first WebSocket JSON frame, buffers audio until the untyped handshake acknowledgement, streams binary audio frames, and ends the session with `endStream`. Its cumulative partials are replacement hypotheses, so only its final result reaches the output sink.
 - **Gemini push-to-talk**: `GeminiLiveWS` sends manual-VAD `activityStart` and `activityEnd`. Messages created before `setupComplete` are queued inside that socket, preserving the start of speech and isolating quickly repeated push-to-talk turns.
 - **Gemini result semantics**: `interimInputTranscription` is a revisable snapshot, not an append-only delta, so it is logged but not typed. Only `inputTranscription` finalized segments reach the output sink. Both text and binary WebSocket response frames are decoded.
 - **WS protocol**: Endpoint is `wss://api.openai.com/v1/realtime?intent=transcription`. The URL `model=` query parameter targets *conversation* models, so we do not use it; the transcription model goes into `session.audio.input.transcription.model`. `turn_detection: null` forces manual commit.

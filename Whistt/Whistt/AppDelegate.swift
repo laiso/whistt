@@ -35,6 +35,9 @@ private let modelGroups: [ModelGroup] = [
     ModelGroup(title: "Google Gemini — final only", provider: .gemini, streamsDeltas: false, models: [
         "gemini-3.5-transcribe-live",
     ]),
+    ModelGroup(title: "Meta — final only", provider: .meta, streamsDeltas: false, models: [
+        "muse-voice-transcribe-1.0",
+    ]),
 ]
 
 private let availableModels: [String] = modelGroups.flatMap(\.models)
@@ -279,8 +282,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        for provider in [TranscriptionProvider.openAI, .gemini] {
-            let label = provider == .openAI ? "OpenAI" : "Gemini"
+        for provider in [TranscriptionProvider.openAI, .gemini, .meta] {
+            let label = provider.displayName
             let setKeyItem = NSMenuItem(title: "Set \(label) API Key…", action: #selector(setAPIKey(_:)), keyEquivalent: "")
             setKeyItem.target = self
             setKeyItem.representedObject = provider.rawValue
@@ -343,13 +346,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func promptForAPIKey(provider: TranscriptionProvider, initial: String?) -> String? {
         let alert = NSAlert()
-        let label = provider == .openAI ? "OpenAI" : "Gemini"
+        let label = provider.displayName
         alert.messageText = "\(label) API Key"
         alert.informativeText = "Paste your \(label) API key. It will be stored in the macOS Keychain."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        field.placeholderString = provider == .openAI ? "sk-..." : "Gemini API key"
+        switch provider {
+        case .openAI: field.placeholderString = "sk-..."
+        case .gemini: field.placeholderString = "Gemini API key"
+        case .meta: field.placeholderString = "Meta Model API key"
+        }
         if let initial = initial { field.stringValue = initial }
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
@@ -381,7 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func clearAPIKey(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let provider = TranscriptionProvider(rawValue: raw) else { return }
-        let label = provider == .openAI ? "OpenAI" : "Gemini"
+        let label = provider.displayName
         let alert = NSAlert()
         alert.messageText = "Clear \(label) API key?"
         alert.informativeText = "The key will be removed from the macOS Keychain."
