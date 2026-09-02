@@ -15,6 +15,10 @@ public final class MetaTranscriptionTransport: NSObject, TranscriptionTransport,
     private var closing = false
     private var pendingAudio: [Data] = []
     private var pendingEndInput = false
+    private var audioChunksSent = 0
+    private var audioBytesSent = 0
+    private var endInputSent = false
+    private var sendFailureReported = false
 
     public init(apiKey: String, model: String) {
         self.apiKey = apiKey
@@ -41,6 +45,10 @@ public final class MetaTranscriptionTransport: NSObject, TranscriptionTransport,
         closing = false
         pendingAudio.removeAll(keepingCapacity: true)
         pendingEndInput = false
+        audioChunksSent = 0
+        audioBytesSent = 0
+        endInputSent = false
+        sendFailureReported = false
         task.resume()
         receiveLoop()
     }
@@ -67,6 +75,7 @@ public final class MetaTranscriptionTransport: NSObject, TranscriptionTransport,
 
     private func _endInput() {
         if configured {
+            endInputSent = true
             sendText(MetaTranscriptionMessage.endStream)
         } else {
             pendingEndInput = true
@@ -80,6 +89,7 @@ public final class MetaTranscriptionTransport: NSObject, TranscriptionTransport,
         pendingAudio.removeAll(keepingCapacity: true)
         if pendingEndInput {
             pendingEndInput = false
+            endInputSent = true
             sendText(MetaTranscriptionMessage.endStream)
         }
         onEvent?(.ready)
@@ -90,14 +100,17 @@ public final class MetaTranscriptionTransport: NSObject, TranscriptionTransport,
     }
 
     private func sendBinary(_ data: Data) {
+        audioChunksSent += 1
+        audioBytesSent += data.count
         task?.send(.data(data)) { [weak self] error in self?.handleSendError(error) }
     }
 
     private func handleSendError(_ error: Error?) {
         guard let error else { return }
         queue.async { [weak self] in
-            guard let self, !self.closing else { return }
-            self.onError?("Meta send: \(error.localizedDescription)")
+            guard let self, !self.closing, !self.sendFailureReported else { return }
+            self.sendFailureReported = true
+            self.onError?("Meta send: \(self.describe(error)); \(self.sessionContext)")
         }
     }
 
@@ -117,9 +130,39 @@ public final class MetaTranscriptionTransport: NSObject, TranscriptionTransport,
                 }
                 if self.task != nil { self.receiveLoop() }
             case .failure(let error):
-                if !self.closing { self.onError?("Meta ws: \(error.localizedDescription)") }
+                if !self.closing {
+                    self.onError?("Meta ws receive: \(self.describe(error)); \(self.sessionContext)")
+                }
             }
         }
+    }
+
+    public func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+        reason: Data?
+    ) {
+        queue.async { [weak self] in
+            guard let self, !self.closing else { return }
+            let reasonText = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "<none>"
+            self.onError?(
+                "Meta ws closed: code=\(closeCode.rawValue), reason=\(reasonText); \(self.sessionContext)"
+            )
+        }
+    }
+
+    private var sessionContext: String {
+        "configured=\(configured), endInputSent=\(endInputSent), audioChunks=\(audioChunksSent), audioBytes=\(audioBytesSent)"
+    }
+
+    private func describe(_ error: Error) -> String {
+        let nsError = error as NSError
+        var result = "domain=\(nsError.domain), code=\(nsError.code), description=\(nsError.localizedDescription)"
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            result += ", underlyingDomain=\(underlying.domain), underlyingCode=\(underlying.code)"
+        }
+        return result
     }
 
     private func handle(_ event: MetaTranscriptionEvent) {

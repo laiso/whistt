@@ -19,6 +19,7 @@ let package = Package(
             path: "Whistt/Whistt",
             exclude: [
                 "Assets.xcassets",
+                "APIKeysWindowController.swift",
                 "WhisttApp.swift",
                 "AppDelegate.swift",
                 "HotKeyManager.swift",

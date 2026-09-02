@@ -70,6 +70,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentModel: String = ""
     private var currentHotKey: HotKey = defaultHotKey
     private var currentStatusIcon: StatusIcon = .idle
+    private lazy var apiKeysWindowController: APIKeysWindowController = {
+        let controller = APIKeysWindowController()
+        controller.onKeysChanged = { [weak self] in
+            self?.reloadCurrentAPIKey()
+        }
+        return controller
+    }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -282,18 +289,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        for provider in [TranscriptionProvider.openAI, .gemini, .meta] {
-            let label = provider.displayName
-            let setKeyItem = NSMenuItem(title: "Set \(label) API Key…", action: #selector(setAPIKey(_:)), keyEquivalent: "")
-            setKeyItem.target = self
-            setKeyItem.representedObject = provider.rawValue
-            menu.addItem(setKeyItem)
-
-            let clearKeyItem = NSMenuItem(title: "Clear \(label) API Key", action: #selector(clearAPIKey(_:)), keyEquivalent: "")
-            clearKeyItem.target = self
-            clearKeyItem.representedObject = provider.rawValue
-            menu.addItem(clearKeyItem)
-        }
+        let apiKeysItem = NSMenuItem(title: "API Keys…", action: #selector(showAPIKeys(_:)), keyEquivalent: "")
+        apiKeysItem.target = self
+        menu.addItem(apiKeysItem)
 
         menu.addItem(.separator())
 
@@ -373,37 +371,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return value
     }
 
-    @objc private func setAPIKey(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let provider = TranscriptionProvider(rawValue: raw) else { return }
-        let existing = resolveAPIKey(for: provider, promptIfMissing: false)
-        guard let newKey = promptForAPIKey(provider: provider, initial: existing), newKey != existing else { return }
-        if provider == currentProvider {
-            apiKey = newKey
-            rebuildAgent()
-        }
-        setStatusIcon(.idle)
+    @objc private func showAPIKeys(_ sender: NSMenuItem) {
+        apiKeysWindowController.present()
     }
 
-    @objc private func clearAPIKey(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let provider = TranscriptionProvider(rawValue: raw) else { return }
-        let label = provider.displayName
-        let alert = NSAlert()
-        alert.messageText = "Clear \(label) API key?"
-        alert.informativeText = "The key will be removed from the macOS Keychain."
-        alert.addButton(withTitle: "Clear")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        _ = KeychainStore.delete(for: provider.apiKeyAccount)
-        // Drop the agent immediately; the user explicitly revoked the key, so any in-flight
-        // transcript draining over the 3s grace is acceptable to lose.
-        if provider == currentProvider {
-            agent?.stop()
-            agent = nil
-            apiKey = nil
-            setStatusIcon(.warning)
-        }
+    private func reloadCurrentAPIKey() {
+        apiKey = resolveAPIKey(for: currentProvider, promptIfMissing: false)
+        rebuildAgent()
         rebuildMenu()
     }
 

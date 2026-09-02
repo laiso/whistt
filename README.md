@@ -32,7 +32,7 @@ Most voice-input apps hide the transcription model behind their service. Whistt 
 
 Switch between **Type at cursor** / **Clipboard** output and pick an OpenAI or Google Gemini transcription model from the menu bar. Gemini uses `gemini-3.5-transcribe-live`, Japanese (`ja-JP`), and manual push-to-talk VAD. Its interim hypotheses are not typed because they can revise earlier text; only finalized text is inserted.
 
-The menu provides independent **Set/Clear API Key** actions for OpenAI, Gemini, and Meta. For local development, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and `META_API_KEY` can be supplied through process environment variables or `.env`; the selected provider's key is migrated to Keychain on first use.
+Open **API Keys…** from the menu to add, replace, or remove keys for OpenAI, Gemini, and Meta in one place. For local development, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and `META_API_KEY` can be supplied through process environment variables or `.env`; the selected provider's key is migrated to Keychain on first use.
 
 <img src="assets/menu-bar.png" alt="Menu bar dropdown" width="500">
 
