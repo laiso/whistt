@@ -65,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentModel: String = ""
     private var currentHotKey: HotKey = defaultHotKey
     private var currentStatusIcon: StatusIcon = .idle
+    private var pendingTranscriptionError: String?
+    private var lastPresentedTranscriptionError: String?
     private lazy var apiKeysWindowController: APIKeysWindowController = {
         let controller = APIKeysWindowController()
         controller.onKeysChanged = { [weak self] in
@@ -101,6 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.setStatusIcon(.warning)
                     return
                 }
+                self.pendingTranscriptionError = nil
+                self.lastPresentedTranscriptionError = nil
                 self.setStatusIcon(.active)
                 SoundFeedback.playRecordingStarted()
                 agent.start()
@@ -114,7 +118,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 let awaitingFinal = agent.stop()
-                self.setStatusIcon(awaitingFinal ? .processing : .idle)
+                if let message = self.pendingTranscriptionError {
+                    self.pendingTranscriptionError = nil
+                    self.setStatusIcon(.warning)
+                    self.presentTranscriptionError(message)
+                } else {
+                    self.setStatusIcon(awaitingFinal ? .processing : .idle)
+                }
                 // Network failures already switch to warning. This fallback prevents a
                 // permanently spinning state if a provider closes without a final event.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
@@ -168,7 +178,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         agent.onError = { [weak self] msg in
             WhisttLog.error(msg)
             DispatchQueue.main.async {
-                self?.setStatusIcon(.warning)
+                guard let self else { return }
+                let wasRecording = self.currentStatusIcon == .active
+                self.setStatusIcon(.warning)
+                let message = self.userFacingTranscriptionError(from: msg)
+                if wasRecording {
+                    // Do not steal focus while push-to-talk is still held.
+                    self.pendingTranscriptionError = message
+                } else {
+                    self.presentTranscriptionError(message)
+                }
             }
         }
         self.agent = agent
@@ -493,5 +512,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.runModal()
+    }
+
+    private func userFacingTranscriptionError(from technicalMessage: String) -> String {
+        if technicalMessage.contains("Incorrect API key") {
+            return "The API key was rejected. Open API Keys… and save a valid key, then try again."
+        }
+        if technicalMessage.contains("Meta"),
+           technicalMessage.contains("Protocol error") {
+            return "The connection to Meta was interrupted while transcribing. No text was inserted. Please try speaking again or switch to another model."
+        }
+        return "Transcription failed, so no text was inserted. Please try again. Technical details were written to debug.log."
+    }
+
+    private func presentTranscriptionError(_ message: String) {
+        guard message != lastPresentedTranscriptionError else { return }
+        lastPresentedTranscriptionError = message
+        showAlert(title: "Transcription Failed", message: message)
     }
 }
