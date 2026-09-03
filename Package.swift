@@ -19,6 +19,7 @@ let package = Package(
             path: "Whistt/Whistt",
             exclude: [
                 "Assets.xcassets",
+                "APIKeysWindowController.swift",
                 "WhisttApp.swift",
                 "AppDelegate.swift",
                 "HotKeyManager.swift",
@@ -32,6 +33,7 @@ let package = Package(
                 "KeychainStore.swift",
                 "TranscriptionProvider.swift",
                 "TranscriptionTransport.swift",
+                "AudioStreamSender.swift",
                 "RealtimeProtocol.swift",
                 "RealtimeWS.swift",
                 "GeminiLiveProtocol.swift",

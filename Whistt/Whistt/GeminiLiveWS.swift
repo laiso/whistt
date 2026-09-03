@@ -13,6 +13,7 @@ public final class GeminiLiveWS: NSObject, URLSessionWebSocketDelegate {
     private var closing = false
     private var configured = false
     private var pendingRealtimeMessages: [String] = []
+    private var sender: AudioStreamSender?
 
     public init(apiKey: String, model: String) {
         self.apiKey = apiKey
@@ -26,8 +27,8 @@ public final class GeminiLiveWS: NSObject, URLSessionWebSocketDelegate {
 
     public func connect() { queue.async { [weak self] in self?._connect() } }
     public func sendActivityStart() { queue.async { [weak self] in self?.sendWhenConfigured(GeminiLiveMessage.activityStart) } }
-    public func sendAudio(_ data: Data) { queue.async { [weak self] in self?.sendWhenConfigured(GeminiLiveMessage.audio(data)) } }
-    public func sendActivityEnd() { queue.async { [weak self] in self?.sendWhenConfigured(GeminiLiveMessage.activityEnd) } }
+    public func sendAudio(_ data: Data) { queue.async { [weak self] in self?.sender?.enqueue(data) } }
+    public func sendActivityEnd() { queue.async { [weak self] in self?._endAudio() } }
     public func close() { queue.async { [weak self] in self?._close() } }
 
     private func _connect() {
@@ -40,8 +41,29 @@ public final class GeminiLiveWS: NSObject, URLSessionWebSocketDelegate {
         closing = false
         configured = false
         pendingRealtimeMessages.removeAll(keepingCapacity: true)
+        sender = makeSender()
         task.resume()
         receiveLoop()
+    }
+
+    /// Passthrough policy: raw PCM flows to the socket as it arrives, but
+    /// only after `setupComplete`; pre-ready audio is buffered by the sender.
+    private func makeSender() -> AudioStreamSender {
+        AudioStreamSender(
+            queue: queue,
+            format: AudioStreamFormat(sampleRate: 16_000, channelCount: 1, bytesPerSample: 2),
+            policy: .passthrough(),
+            send: { [weak self] data, completion in
+                self?.send(string: GeminiLiveMessage.audio(data), completion: completion)
+            },
+            onEndOfAudio: { [weak self] in
+                self?.send(string: GeminiLiveMessage.activityEnd, completion: {})
+            }
+        )
+    }
+
+    private func _endAudio() {
+        sender?.endInput()
     }
 
     public func urlSession(
@@ -57,12 +79,30 @@ public final class GeminiLiveWS: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func send(_ string: String) {
-        guard let task else { return }
+        send(string: string, completion: {})
+    }
+
+    private func send(string: String, completion: @escaping () -> Void) {
+        guard let task else {
+            completion()
+            return
+        }
         task.send(.string(string)) { [weak self] error in
-            guard let self, let error else { return }
+            guard let self else {
+                completion()
+                return
+            }
+            guard let error else {
+                completion()
+                return
+            }
             self.queue.async {
-                guard !self.closing else { return }
-                self.onError?("Gemini send: \(error.localizedDescription)")
+                if !self.closing {
+                    self.sender?.reset()
+                    self.sender = nil
+                    self.onError?("Gemini send: \(error.localizedDescription)")
+                }
+                completion()
             }
         }
     }
@@ -80,6 +120,7 @@ public final class GeminiLiveWS: NSObject, URLSessionWebSocketDelegate {
         configured = true
         for message in pendingRealtimeMessages { send(message) }
         pendingRealtimeMessages.removeAll(keepingCapacity: true)
+        sender?.markReady()
     }
 
     private func receiveLoop() {
@@ -99,13 +140,19 @@ public final class GeminiLiveWS: NSObject, URLSessionWebSocketDelegate {
                 }
                 if self.task != nil { self.receiveLoop() }
             case .failure(let error):
-                if !self.closing { self.onError?("Gemini ws: \(error.localizedDescription)") }
+                if !self.closing {
+                    self.sender?.reset()
+                    self.sender = nil
+                    self.onError?("Gemini ws: \(error.localizedDescription)")
+                }
             }
         }
     }
 
     private func _close() {
         closing = true
+        sender?.reset()
+        sender = nil
         task?.cancel(with: .normalClosure, reason: nil)
         session?.invalidateAndCancel()
         task = nil

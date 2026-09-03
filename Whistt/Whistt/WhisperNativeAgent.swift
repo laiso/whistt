@@ -13,6 +13,10 @@ final class WhisperNativeAgent: NSObject {
     private let bytesLock = NSLock()
     private var _bytesSent = 0
     private var lastDeliveredTranscript: String?
+    private var sessionStartedAt: TimeInterval?
+    private var connectStartedAt: TimeInterval?
+    private var inputEndedAt: TimeInterval?
+    private var firstTranscriptLogged = false
     private static let finalGraceSeconds: TimeInterval = 5.0
 
     var onTranscriptDelta: ((String) -> Void)?
@@ -38,6 +42,10 @@ final class WhisperNativeAgent: NSObject {
         isRunning = true
         resetBytes()
         lastDeliveredTranscript = nil
+        sessionStartedAt = ProcessInfo.processInfo.systemUptime
+        connectStartedAt = nil
+        inputEndedAt = nil
+        firstTranscriptLogged = false
         AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
             DispatchQueue.main.async {
                 guard let self = self else { return }
@@ -66,6 +74,11 @@ final class WhisperNativeAgent: NSObject {
         converter = nil
 
         let bytes = bytesSent()
+        inputEndedAt = ProcessInfo.processInfo.systemUptime
+        WhisttLog.event(
+            "timing provider=\(provider.rawValue) milestone=input_end "
+                + "sinceStartMs=\(elapsedMilliseconds(since: sessionStartedAt)) audioBytes=\(bytes)"
+        )
         let minBytes = Int(targetFormat.sampleRate * 0.1) * MemoryLayout<Int16>.size
         let awaitsFinalTranscript = bytes >= minBytes
         if awaitsFinalTranscript {
@@ -85,6 +98,7 @@ final class WhisperNativeAgent: NSObject {
     }
 
     private func connect() {
+        connectStartedAt = ProcessInfo.processInfo.systemUptime
         WhisttLog.event("connecting (provider=\(provider.rawValue), model=\(model))")
         // stop() releases the previous transport. A fresh start creates the selected
         // provider's transport so delayed teardown can never close a new session.
@@ -103,10 +117,13 @@ final class WhisperNativeAgent: NSObject {
     private func handle(_ event: TranscriptionTransportEvent) {
         switch event {
         case .ready:
-            WhisttLog.event("transport ready")
+            WhisttLog.event(
+                "transport ready (provider=\(provider.rawValue), connectMs=\(elapsedMilliseconds(since: connectStartedAt)))"
+            )
         case .speechStarted:
             WhisttLog.event("speech_started")
         case .partial(let text, let replacesPrevious):
+            logFirstTranscriptIfNeeded(kind: "partial")
             if replacesPrevious {
                 WhisttLog.debugEvent("replacement partial chars=\(text.count)")
             } else {
@@ -114,13 +131,35 @@ final class WhisperNativeAgent: NSObject {
                 onTranscriptDelta?(text)
             }
         case .final(let text):
+            logFirstTranscriptIfNeeded(kind: "final")
+            WhisttLog.event(
+                "timing provider=\(provider.rawValue) milestone=final "
+                    + "sinceStartMs=\(elapsedMilliseconds(since: sessionStartedAt)) "
+                    + "afterInputEndMs=\(elapsedMilliseconds(since: inputEndedAt)) chars=\(text.count)"
+            )
             WhisttLog.final(text)
             deliverComplete(text)
         case .turnComplete:
             WhisttLog.event("turn complete")
         case .unknown(let type):
-            WhisttLog.debugEvent(type)
+            if type.hasPrefix("diagnostic.") { WhisttLog.event(type) }
+            else { WhisttLog.debugEvent(type) }
         }
+    }
+
+    private func logFirstTranscriptIfNeeded(kind: String) {
+        guard !firstTranscriptLogged else { return }
+        firstTranscriptLogged = true
+        WhisttLog.event(
+            "timing provider=\(provider.rawValue) milestone=first_\(kind) "
+                + "sinceStartMs=\(elapsedMilliseconds(since: sessionStartedAt)) "
+                + "afterInputEndMs=\(elapsedMilliseconds(since: inputEndedAt))"
+        )
+    }
+
+    private func elapsedMilliseconds(since start: TimeInterval?) -> Int {
+        guard let start else { return -1 }
+        return max(0, Int(((ProcessInfo.processInfo.systemUptime - start) * 1_000).rounded()))
     }
 
     private func deliverComplete(_ transcript: String) {

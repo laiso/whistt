@@ -24,13 +24,8 @@ private struct ModelGroup {
 }
 
 private let modelGroups: [ModelGroup] = [
-    ModelGroup(title: "OpenAI — streaming deltas", provider: .openAI, streamsDeltas: true, models: [
+    ModelGroup(title: "OpenAI — realtime", provider: .openAI, streamsDeltas: true, models: [
         "gpt-realtime-whisper",
-    ]),
-    ModelGroup(title: "OpenAI — final only", provider: .openAI, streamsDeltas: false, models: [
-        "gpt-4o-transcribe",
-        "gpt-4o-mini-transcribe",
-        "whisper-1",
     ]),
     ModelGroup(title: "Google Gemini — final only", provider: .gemini, streamsDeltas: false, models: [
         "gemini-3.5-transcribe-live",
@@ -70,13 +65,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentModel: String = ""
     private var currentHotKey: HotKey = defaultHotKey
     private var currentStatusIcon: StatusIcon = .idle
+    private lazy var apiKeysWindowController: APIKeysWindowController = {
+        let controller = APIKeysWindowController()
+        controller.onKeysChanged = { [weak self] in
+            self?.reloadCurrentAPIKey()
+        }
+        return controller
+    }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
 
         let savedModel = UserDefaults.standard.string(forKey: modelDefaultsKey)
         let envModel = EnvLoader.value(for: "WHISTT_MODEL")
-        currentModel = savedModel ?? envModel ?? defaultModel
+        let preferredModel = savedModel ?? envModel
+        currentModel = preferredModel.flatMap { availableModels.contains($0) ? $0 : nil } ?? defaultModel
+        if savedModel != nil, savedModel != currentModel {
+            UserDefaults.standard.set(currentModel, forKey: modelDefaultsKey)
+        }
         self.apiKey = resolveAPIKey(for: currentProvider)
 
         if let kc = UserDefaults.standard.object(forKey: shortcutKeyCodeDefaultsKey) as? NSNumber,
@@ -190,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // would duplicate the transcript.
             break
         }
+        WhisttLog.event("timing provider=\(currentProvider.rawValue) milestone=output_applied mode=\(outputMode.rawValue) chars=\(full.count)")
         if currentStatusIcon != .active { setStatusIcon(.idle) }
     }
 
@@ -282,18 +289,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        for provider in [TranscriptionProvider.openAI, .gemini, .meta] {
-            let label = provider.displayName
-            let setKeyItem = NSMenuItem(title: "Set \(label) API Key…", action: #selector(setAPIKey(_:)), keyEquivalent: "")
-            setKeyItem.target = self
-            setKeyItem.representedObject = provider.rawValue
-            menu.addItem(setKeyItem)
-
-            let clearKeyItem = NSMenuItem(title: "Clear \(label) API Key", action: #selector(clearAPIKey(_:)), keyEquivalent: "")
-            clearKeyItem.target = self
-            clearKeyItem.representedObject = provider.rawValue
-            menu.addItem(clearKeyItem)
-        }
+        let apiKeysItem = NSMenuItem(title: "API Keys…", action: #selector(showAPIKeys(_:)), keyEquivalent: "")
+        apiKeysItem.target = self
+        menu.addItem(apiKeysItem)
 
         menu.addItem(.separator())
 
@@ -316,10 +314,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func resolveAPIKey(for provider: TranscriptionProvider, promptIfMissing: Bool = true) -> String? {
         let account = provider.apiKeyAccount
-        if let raw = ProcessInfo.processInfo.environment[account] {
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
-        }
+        // The settings window writes to Keychain, so a saved value must be
+        // authoritative. Environment and .env values are legacy/development
+        // fallbacks used only to seed Keychain when no saved value exists.
         if let stored = KeychainStore.value(for: account) {
             return stored
         }
@@ -373,37 +370,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return value
     }
 
-    @objc private func setAPIKey(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let provider = TranscriptionProvider(rawValue: raw) else { return }
-        let existing = resolveAPIKey(for: provider, promptIfMissing: false)
-        guard let newKey = promptForAPIKey(provider: provider, initial: existing), newKey != existing else { return }
-        if provider == currentProvider {
-            apiKey = newKey
-            rebuildAgent()
-        }
-        setStatusIcon(.idle)
+    @objc private func showAPIKeys(_ sender: NSMenuItem) {
+        apiKeysWindowController.present()
     }
 
-    @objc private func clearAPIKey(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let provider = TranscriptionProvider(rawValue: raw) else { return }
-        let label = provider.displayName
-        let alert = NSAlert()
-        alert.messageText = "Clear \(label) API key?"
-        alert.informativeText = "The key will be removed from the macOS Keychain."
-        alert.addButton(withTitle: "Clear")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        _ = KeychainStore.delete(for: provider.apiKeyAccount)
-        // Drop the agent immediately; the user explicitly revoked the key, so any in-flight
-        // transcript draining over the 3s grace is acceptable to lose.
-        if provider == currentProvider {
-            agent?.stop()
-            agent = nil
-            apiKey = nil
-            setStatusIcon(.warning)
-        }
+    private func reloadCurrentAPIKey() {
+        apiKey = resolveAPIKey(for: currentProvider, promptIfMissing: false)
+        rebuildAgent()
         rebuildMenu()
     }
 

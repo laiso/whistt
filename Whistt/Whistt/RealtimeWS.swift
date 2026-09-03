@@ -37,9 +37,7 @@ public final class RealtimeWS {
     }
 
     public func sendCommit() {
-        queue.async { [weak self] in
-            self?.send(string: RealtimeMessage.audioCommit)
-        }
+        queue.async { [weak self] in self?.sender?.endInput() }
     }
 
     public func close() {
@@ -55,6 +53,7 @@ public final class RealtimeWS {
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     private var closing = false
+    private var sender: AudioStreamSender?
 
     private func _connect() {
         // Use the transcription-intent endpoint. Passing `?model=<transcription-model>` is
@@ -69,8 +68,26 @@ public final class RealtimeWS {
         self.session = session
         self.task = task
         closing = false
+        sender = makeSender()
+        sender?.markReady()
         task.resume()
         receiveLoop()
+    }
+
+    /// Passthrough policy: audio appends flow to the socket as they arrive,
+    /// serialized through the shared sender (one send in flight).
+    private func makeSender() -> AudioStreamSender {
+        AudioStreamSender(
+            queue: queue,
+            format: AudioStreamFormat(sampleRate: 24_000, channelCount: 1, bytesPerSample: 2),
+            policy: .passthrough(),
+            send: { [weak self] data, completion in
+                self?.send(string: RealtimeMessage.audioAppend(data), completion: completion)
+            },
+            onEndOfAudio: { [weak self] in
+                self?.send(string: RealtimeMessage.audioCommit)
+            }
+        )
     }
 
     private func _sendSessionUpdate() {
@@ -82,16 +99,34 @@ public final class RealtimeWS {
     }
 
     private func _sendAudio(_ data: Data) {
-        send(string: RealtimeMessage.audioAppend(data))
+        sender?.enqueue(data)
     }
 
     private func send(string: String) {
-        guard let task = task else { return }
+        send(string: string, completion: {})
+    }
+
+    private func send(string: String, completion: @escaping () -> Void) {
+        guard let task = task else {
+            completion()
+            return
+        }
         task.send(.string(string)) { [weak self] err in
-            guard let self = self, let err = err else { return }
+            guard let self = self else {
+                completion()
+                return
+            }
+            guard let err = err else {
+                completion()
+                return
+            }
             self.queue.async {
-                guard !self.closing else { return }
-                self.onError?("send: \(err.localizedDescription)")
+                if !self.closing {
+                    self.sender?.reset()
+                    self.sender = nil
+                    self.onError?("send: \(err.localizedDescription)")
+                }
+                completion()
             }
         }
     }
@@ -105,12 +140,23 @@ public final class RealtimeWS {
                 if case .string(let str) = message,
                    let event = RealtimeEvent.decode(from: str) {
                     self.onEvent?(event)
+                    // A protocol-level error (authentication failures included)
+                    // is terminal for this socket. Stop synchronously before
+                    // starting another receive or allowing queued audio sends,
+                    // otherwise one server error fans out into receive/send
+                    // "Socket is not connected" failures.
+                    if case .error = event {
+                        self._close()
+                        return
+                    }
                 }
                 if self.task != nil {
                     self.receiveLoop()
                 }
             case .failure(let err):
                 if !self.closing {
+                    self.sender?.reset()
+                    self.sender = nil
                     self.onError?("ws: \(err.localizedDescription)")
                 }
             }
@@ -119,6 +165,8 @@ public final class RealtimeWS {
 
     private func _close() {
         closing = true
+        sender?.reset()
+        sender = nil
         task?.cancel(with: .normalClosure, reason: nil)
         session?.invalidateAndCancel()
         task = nil

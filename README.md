@@ -30,9 +30,9 @@ Most voice-input apps hide the transcription model behind their service. Whistt 
    <img src="assets/accessibility.png" alt="Accessibility settings with Whistt enabled" width="360">
 4. Hold ⌥+Space, speak, release — text appears at your cursor.
 
-Switch between **Type at cursor** / **Clipboard** output and pick an OpenAI or Google Gemini transcription model from the menu bar. Gemini uses `gemini-3.5-transcribe-live`, Japanese (`ja-JP`), and manual push-to-talk VAD. Its interim hypotheses are not typed because they can revise earlier text; only finalized text is inserted.
+Switch between **Type at cursor** / **Clipboard** output and pick a transcription model from the menu bar. OpenAI uses the realtime-only `gpt-realtime-whisper`. Gemini uses `gemini-3.5-transcribe-live`, Japanese (`ja-JP`), and manual push-to-talk VAD. Its interim hypotheses are not typed because they can revise earlier text; only finalized text is inserted.
 
-The menu provides independent **Set/Clear API Key** actions for OpenAI, Gemini, and Meta. For local development, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and `META_API_KEY` can be supplied through process environment variables or `.env`; the selected provider's key is migrated to Keychain on first use.
+Open **API Keys…** from the menu to add, replace, or remove keys for OpenAI, Gemini, and Meta in one place. For local development, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and `META_API_KEY` can be supplied through process environment variables or `.env`; the selected provider's key is migrated to Keychain on first use.
 
 <img src="assets/menu-bar.png" alt="Menu bar dropdown" width="500">
 
@@ -72,6 +72,23 @@ Releases are distributed **unsigned**, so the first launch from `/Applications/`
 - **Space leaks into the focused app** — Accessibility wasn't granted yet; the app auto-recovers within ~2 s after granting (no relaunch needed since v0.1.1).
 - **Key dialog reappears** — the Keychain entry is missing or empty; paste the key again.
 - **Gemini finishes but no text appears** — confirm that `gemini-3.5-transcribe-live` is selected and the Gemini key has Live API access.
+
+### Local diagnostics
+
+Build and launch the Debug app while showing its logs in the terminal and saving them to `debug.log`:
+
+```bash
+make debug
+```
+
+The command loads `.env` when present. Stop the app with Control-C. `debug.log` is local-only and ignored by Git.
+
+Other development commands:
+
+```bash
+make build
+make test
+```
 
 ## Gemini Live API probe
 
