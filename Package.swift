@@ -11,7 +11,8 @@ let package = Package(
         .library(name: "WhisttCore", targets: ["WhisttCore"]),
         .executable(name: "realtime-probe", targets: ["RealtimeProbe"]),
         .executable(name: "gemini-live-probe", targets: ["GeminiLiveProbe"]),
-        .executable(name: "meta-live-probe", targets: ["MetaLiveProbe"])
+        .executable(name: "meta-live-probe", targets: ["MetaLiveProbe"]),
+        .executable(name: "xai-live-probe", targets: ["XaiLiveProbe"])
     ],
     targets: [
         .target(
@@ -41,7 +42,10 @@ let package = Package(
                 "GeminiLiveProtocol.swift",
                 "GeminiLiveWS.swift",
                 "MetaTranscriptionProtocol.swift",
-                "MetaTranscriptionWS.swift"
+                "MetaTranscriptionWS.swift",
+                "TranscriptRevision.swift",
+                "XaiTranscriptionProtocol.swift",
+                "XaiTranscriptionWS.swift"
             ]
         ),
         .executableTarget(
@@ -58,6 +62,11 @@ let package = Package(
             name: "MetaLiveProbe",
             dependencies: ["WhisttCore"],
             path: "Tools/MetaLiveProbe"
+        ),
+        .executableTarget(
+            name: "XaiLiveProbe",
+            dependencies: ["WhisttCore"],
+            path: "Tools/XaiLiveProbe"
         ),
         .testTarget(
             name: "WhisttCoreTests",

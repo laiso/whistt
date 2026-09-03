@@ -34,6 +34,9 @@ private let modelGroups: [ModelGroup] = [
     ModelGroup(title: "Meta — final only", provider: .meta, streamsDeltas: false, models: [
         "muse-voice-transcribe-1.0",
     ]),
+    ModelGroup(title: "xAI — streaming", provider: .xAI, streamsDeltas: true, models: [
+        "xai-streaming-stt",
+    ]),
 ]
 
 private let availableModels: [String] = modelGroups.flatMap(\.models)
@@ -199,6 +202,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         agent.onTranscriptDelta = { [weak self] delta in
             DispatchQueue.main.async { self?.handle(delta: delta) }
         }
+        agent.onOutputOps = { [weak self] ops in
+            DispatchQueue.main.async { self?.handle(ops: ops) }
+        }
         agent.onTranscriptComplete = { [weak self] full in
             DispatchQueue.main.async { self?.handleFinal(full) }
         }
@@ -226,6 +232,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         output(delta: delta)
+    }
+
+    /// Cursor corrections for revision-streaming providers (xAI): erase the
+    /// superseded interim hypothesis and type the new text. Buffered while a
+    /// modifier-only capture is pending — the committed final transcript is
+    /// typed once at release, so partial corrections never reach the cursor.
+    private func handle(ops: [TranscriptOutputOp]) {
+        guard !discardCurrentCapture else { return }
+        guard !modifierOnlyCapturePending else { return }
+        guard outputMode == .typing, currentModelStreamsDeltas else { return }
+        for op in ops {
+            switch op {
+            case .erase(let count): TypingEmulator.erase(count: count)
+            case .type(let text): TypingEmulator.type(text)
+            }
+        }
     }
 
     private func output(delta: String) {
@@ -436,6 +458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .openAI: field.placeholderString = "sk-..."
         case .gemini: field.placeholderString = "Gemini API key"
         case .meta: field.placeholderString = "Meta Model API key"
+        case .xAI: field.placeholderString = "xai-..."
         }
         if let initial = initial { field.stringValue = initial }
         alert.accessoryView = field

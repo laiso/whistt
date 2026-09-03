@@ -1,7 +1,7 @@
 import AppKit
 
 final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
-    private let providers: [TranscriptionProvider] = [.openAI, .gemini, .meta]
+    private let providers: [TranscriptionProvider] = [.openAI, .gemini, .meta, .xAI]
     private var fields: [TranscriptionProvider: NSSecureTextField] = [:]
     private var statusLabels: [TranscriptionProvider: NSTextField] = [:]
     private var removeButtons: [TranscriptionProvider: NSButton] = [:]
@@ -176,6 +176,7 @@ final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
         case .openAI: return "sk-…"
         case .gemini: return "Gemini API key"
         case .meta: return "Meta API key"
+        case .xAI: return "xai-…"
         }
     }
 
