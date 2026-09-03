@@ -24,13 +24,8 @@ private struct ModelGroup {
 }
 
 private let modelGroups: [ModelGroup] = [
-    ModelGroup(title: "OpenAI — streaming deltas", provider: .openAI, streamsDeltas: true, models: [
+    ModelGroup(title: "OpenAI — realtime", provider: .openAI, streamsDeltas: true, models: [
         "gpt-realtime-whisper",
-    ]),
-    ModelGroup(title: "OpenAI — final only", provider: .openAI, streamsDeltas: false, models: [
-        "gpt-4o-transcribe",
-        "gpt-4o-mini-transcribe",
-        "whisper-1",
     ]),
     ModelGroup(title: "Google Gemini — final only", provider: .gemini, streamsDeltas: false, models: [
         "gemini-3.5-transcribe-live",
@@ -83,7 +78,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let savedModel = UserDefaults.standard.string(forKey: modelDefaultsKey)
         let envModel = EnvLoader.value(for: "WHISTT_MODEL")
-        currentModel = savedModel ?? envModel ?? defaultModel
+        let preferredModel = savedModel ?? envModel
+        currentModel = preferredModel.flatMap { availableModels.contains($0) ? $0 : nil } ?? defaultModel
+        if savedModel != nil, savedModel != currentModel {
+            UserDefaults.standard.set(currentModel, forKey: modelDefaultsKey)
+        }
         self.apiKey = resolveAPIKey(for: currentProvider)
 
         if let kc = UserDefaults.standard.object(forKey: shortcutKeyCodeDefaultsKey) as? NSNumber,
@@ -197,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // would duplicate the transcript.
             break
         }
+        WhisttLog.event("timing provider=\(currentProvider.rawValue) milestone=output_applied mode=\(outputMode.rawValue) chars=\(full.count)")
         if currentStatusIcon != .active { setStatusIcon(.idle) }
     }
 
@@ -314,10 +314,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func resolveAPIKey(for provider: TranscriptionProvider, promptIfMissing: Bool = true) -> String? {
         let account = provider.apiKeyAccount
-        if let raw = ProcessInfo.processInfo.environment[account] {
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
-        }
+        // The settings window writes to Keychain, so a saved value must be
+        // authoritative. Environment and .env values are legacy/development
+        // fallbacks used only to seed Keychain when no saved value exists.
         if let stored = KeychainStore.value(for: account) {
             return stored
         }
