@@ -33,6 +33,7 @@ let package = Package(
                 "KeychainStore.swift",
                 "TranscriptionProvider.swift",
                 "TranscriptionTransport.swift",
+                "AudioStreamSender.swift",
                 "RealtimeProtocol.swift",
                 "RealtimeWS.swift",
                 "GeminiLiveProtocol.swift",
