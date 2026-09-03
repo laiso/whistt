@@ -17,11 +17,21 @@ final class WhisperNativeAgent: NSObject {
     private var connectStartedAt: TimeInterval?
     private var inputEndedAt: TimeInterval?
     private var firstTranscriptLogged = false
+    // Results from a transport may arrive during its deferred close. Associate
+    // every transport callback with the start that created it so an older
+    // capture can never be delivered into a newer one.
+    private var sessionGeneration = 0
     private static let finalGraceSeconds: TimeInterval = 5.0
 
     var onTranscriptDelta: ((String) -> Void)?
+    // Cursor output operations for providers that stream revisable interims
+    // (currently xAI). Applied in order by the output layer.
+    var onOutputOps: (([TranscriptOutputOp]) -> Void)?
     var onTranscriptComplete: ((String) -> Void)?
     var onError: ((String) -> Void)?
+    // Created lazily on the first revision event; only revision-streaming
+    // providers need cursor correction.
+    private var revisionBuffer: TranscriptRevisionBuffer?
 
     init(apiKey: String, model: String = "gpt-realtime-whisper", provider: TranscriptionProvider = .openAI) {
         self.apiKey = apiKey
@@ -40,8 +50,11 @@ final class WhisperNativeAgent: NSObject {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        sessionGeneration += 1
+        let generation = sessionGeneration
         resetBytes()
         lastDeliveredTranscript = nil
+        revisionBuffer = nil
         sessionStartedAt = ProcessInfo.processInfo.systemUptime
         connectStartedAt = nil
         inputEndedAt = nil
@@ -49,6 +62,7 @@ final class WhisperNativeAgent: NSObject {
         AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
             DispatchQueue.main.async {
                 guard let self = self else { return }
+                guard generation == self.sessionGeneration else { return }
                 guard granted else {
                     self.isRunning = false
                     self.onError?("microphone permission denied — enable in System Settings → Privacy & Security → Microphone")
@@ -57,7 +71,7 @@ final class WhisperNativeAgent: NSObject {
                 // User may have released the hotkey before the (async) permission prompt resolved —
                 // don't open a socket for a session that's already been cancelled.
                 guard self.isRunning else { return }
-                self.connect()
+                self.connect(generation: generation)
                 self.startAudio()
             }
         }
@@ -97,7 +111,7 @@ final class WhisperNativeAgent: NSObject {
         return awaitsFinalTranscript
     }
 
-    private func connect() {
+    private func connect(generation: Int) {
         connectStartedAt = ProcessInfo.processInfo.systemUptime
         WhisttLog.event("connecting (provider=\(provider.rawValue), model=\(model))")
         // stop() releases the previous transport. A fresh start creates the selected
@@ -106,10 +120,16 @@ final class WhisperNativeAgent: NSObject {
             transport = TranscriptionTransportFactory.make(provider: provider, apiKey: apiKey, model: model)
         }
         transport?.onEvent = { [weak self] event in
-            DispatchQueue.main.async { self?.handle(event) }
+            DispatchQueue.main.async {
+                guard let self, generation == self.sessionGeneration else { return }
+                self.handle(event)
+            }
         }
         transport?.onError = { [weak self] message in
-            DispatchQueue.main.async { self?.onError?(message) }
+            DispatchQueue.main.async {
+                guard let self, generation == self.sessionGeneration else { return }
+                self.onError?(message)
+            }
         }
         transport?.connect()
     }
@@ -130,6 +150,22 @@ final class WhisperNativeAgent: NSObject {
                 WhisttLog.delta(text)
                 onTranscriptDelta?(text)
             }
+        case .revision(let revision):
+            logFirstTranscriptIfNeeded(kind: "partial")
+            let buffer: TranscriptRevisionBuffer
+            if let existing = revisionBuffer {
+                buffer = existing
+            } else {
+                buffer = TranscriptRevisionBuffer()
+                revisionBuffer = buffer
+            }
+            let ops = buffer.apply(revision)
+            if !ops.isEmpty {
+                WhisttLog.debugEvent(
+                    "revision ops=\(ops.count) confirmedChars=\(revision.confirmedText.count) interimChars=\(revision.interimText.count)"
+                )
+                onOutputOps?(ops)
+            }
         case .final(let text):
             logFirstTranscriptIfNeeded(kind: "final")
             WhisttLog.event(
@@ -138,6 +174,10 @@ final class WhisperNativeAgent: NSObject {
                     + "afterInputEndMs=\(elapsedMilliseconds(since: inputEndedAt)) chars=\(text.count)"
             )
             WhisttLog.final(text)
+            if revisionBuffer != nil {
+                let ops = revisionBuffer!.applyFinal(text)
+                if !ops.isEmpty { onOutputOps?(ops) }
+            }
             deliverComplete(text)
         case .turnComplete:
             WhisttLog.event("turn complete")

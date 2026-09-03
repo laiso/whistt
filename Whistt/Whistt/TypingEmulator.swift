@@ -16,6 +16,21 @@ enum TypingEmulator {
             keyUp?.post(tap: .cghidEventTap)
         }
     }
+
+    /// Deletes `count` characters before the cursor with backspace events.
+    /// Used to retract a superseded interim transcript hypothesis.
+    static func erase(count: Int) {
+        guard count > 0 else { return }
+        let source = CGEventSource(stateID: .hidSystemState)
+        // 51 = Carbon kVK_Delete (backspace).
+        let backspace = CGKeyCode(51)
+        for _ in 0..<count {
+            let keyDown = CGEvent(keyboardEventSource: source, virtualKey: backspace, keyDown: true)
+            let keyUp = CGEvent(keyboardEventSource: source, virtualKey: backspace, keyDown: false)
+            keyDown?.post(tap: .cghidEventTap)
+            keyUp?.post(tap: .cghidEventTap)
+        }
+    }
 }
 
 enum ClipboardOutput {

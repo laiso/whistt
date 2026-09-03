@@ -4,6 +4,9 @@ public enum TranscriptionTransportEvent: Equatable {
     case ready
     case speechStarted
     case partial(text: String, replacesPrevious: Bool)
+    /// A provider-neutral transcript revision (see `TranscriptRevision`).
+    /// Emitted by transports whose providers support revisable interims.
+    case revision(TranscriptRevision)
     case final(String)
     case turnComplete
     case unknown(String)
@@ -33,6 +36,8 @@ public enum TranscriptionTransportFactory {
             return GeminiTranscriptionTransport(apiKey: apiKey, model: model)
         case .meta:
             return MetaTranscriptionTransport(apiKey: apiKey, model: model)
+        case .xAI:
+            return XaiTranscriptionTransport(apiKey: apiKey)
         }
     }
 }

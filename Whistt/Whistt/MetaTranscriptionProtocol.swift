@@ -4,7 +4,7 @@ public enum MetaTranscriptionMessage {
     public static func handshake(
         apiKey: String,
         model: String,
-        languageBias: [String] = ["Japanese"],
+        languageBias: [String] = [],
         keywords: [String] = []
     ) throws -> String {
         var object: [String: Any] = [

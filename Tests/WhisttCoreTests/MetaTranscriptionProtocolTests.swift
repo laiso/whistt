@@ -16,7 +16,8 @@ final class MetaTranscriptionProtocolTests: XCTestCase {
         XCTAssertEqual(json["audioEncoding"] as? String, "PCM_24KHZ")
         XCTAssertEqual(json["mode"] as? String, "PUSH_TO_TALK")
         XCTAssertEqual(json["partialMode"] as? String, "CUMULATIVE")
-        XCTAssertEqual(json["languageBias"] as? [String], ["Japanese"])
+        // Language bias is opt-in only; no language is hardcoded.
+        XCTAssertNil(json["languageBias"])
     }
 
     func testEndStreamIsExactControlMessage() {

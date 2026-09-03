@@ -17,6 +17,7 @@ build:
 debug: build
 	@set -a; \
 	[[ ! -f .env ]] || source .env; \
+	export WHISTT_PREFER_ENV_API_KEYS=1; \
 	set +a; \
 	$(WHISTT_BINARY) 2>&1 | tee ./debug.log
 
