@@ -82,7 +82,7 @@ Build and launch the Debug app while showing its logs in the terminal and saving
 make debug
 ```
 
-The command loads `.env` when present. Stop the app with Control-C. `debug.log` is local-only and ignored by Git.
+The command loads `.env` when present and uses a provider key from it directly, without accessing Keychain for that provider. Keys that are absent from `.env` fall back to the normal Keychain behavior. A normal app launch remains Keychain-first. Stop the app with Control-C. `debug.log` is local-only and ignored by Git.
 
 Other development commands:
 
