@@ -416,7 +416,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func customizeShortcut(_ sender: NSMenuItem) {
-        presentShortcutRecorder()
+        // Let status-menu tracking finish before opening a modal window. LSUIElement apps
+        // can otherwise leave keyboard focus on the previously active application, causing
+        // the local event monitor in the recorder to receive no key events.
+        DispatchQueue.main.async { [weak self] in
+            self?.presentShortcutRecorder()
+        }
     }
 
     private func applyHotKey(_ newHotKey: HotKey) {
@@ -433,6 +438,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Stop the global tap so the existing shortcut doesn't fire during recording.
         hotKey.stop()
         defer { hotKey.start() }
+
+        NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
         alert.messageText = "Record Shortcut"

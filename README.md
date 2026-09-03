@@ -111,4 +111,5 @@ It reads `META_API_KEY` through `EnvLoader`, authenticates inside the WebSocket 
 ## More
 
 - Architecture & module layout → `ARCHITECTURE.md`.
+- Manual acceptance tests and automation status → `docs/acceptance/`.
 - Key sources (env var override, legacy `.env` migration), advanced model notes → ARCHITECTURE.md "Design highlights".
