@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 
 enum OutputMode: String {
     case typing
@@ -44,17 +45,15 @@ private func groupTitle(forModel name: String) -> String? {
 
 private let modelDefaultsKey = "WHISTT_MODEL"
 private let envMigrationNoticeKey = "WHISTT_ENV_MIGRATION_NOTICE_SHOWN"
-private let shortcutKeyCodeDefaultsKey = "WHISTT_SHORTCUT_KEYCODE"
-private let shortcutModifiersDefaultsKey = "WHISTT_SHORTCUT_MODIFIERS"
 
-private let shortcutPresets: [HotKey] = [
-    HotKey(keyCode: 49, modifiers: .maskAlternate),
-    HotKey(keyCode: 49, modifiers: .maskControl),
-    HotKey(keyCode: 49, modifiers: [.maskCommand, .maskAlternate]),
-    HotKey(keyCode: 50, modifiers: .maskAlternate),
+private let shortcutPresets: [ShortcutBinding] = [
+    .chord(keyCode: 49, modifiers: CGEventFlags.maskAlternate.rawValue),
+    .chord(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue),
+    .chord(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskAlternate.rawValue),
+    .chord(keyCode: 50, modifiers: CGEventFlags.maskAlternate.rawValue),
 ]
 
-private let defaultHotKey = shortcutPresets[0]
+private let defaultBinding = shortcutPresets[0]
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -63,10 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var outputMode: OutputMode = .typing
     private var apiKey: String?
     private var currentModel: String = ""
-    private var currentHotKey: HotKey = defaultHotKey
+    private var currentBinding: ShortcutBinding = defaultBinding
     private var currentStatusIcon: StatusIcon = .idle
-    private var pendingTranscriptionError: String?
+    private var transcriptionFailed = false
     private var lastPresentedTranscriptionError: String?
+    // Set when a cancelled shortcut gesture discards an in-flight capture;
+    // its pending deltas and final transcript are ignored.
+    private var discardCurrentCapture = false
     private lazy var apiKeysWindowController: APIKeysWindowController = {
         let controller = APIKeysWindowController()
         controller.onKeysChanged = { [weak self] in
@@ -87,11 +89,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.apiKey = resolveAPIKey(for: currentProvider)
 
-        if let kc = UserDefaults.standard.object(forKey: shortcutKeyCodeDefaultsKey) as? NSNumber,
-           let mods = UserDefaults.standard.object(forKey: shortcutModifiersDefaultsKey) as? NSNumber {
-            currentHotKey = HotKey(keyCode: kc.int64Value, modifiers: CGEventFlags(rawValue: mods.uint64Value))
+        if let stored = ShortcutBindingStore.load(defaults: .standard) {
+            currentBinding = stored
+        } else {
+            currentBinding = defaultBinding
+            WhisttLog.event("no valid stored shortcut; falling back to default binding")
         }
-        hotKey.hotKey = currentHotKey
+        hotKey.updateBinding(currentBinding)
 
         rebuildAgent()
         rebuildMenu()
@@ -103,7 +107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.setStatusIcon(.warning)
                     return
                 }
-                self.pendingTranscriptionError = nil
+                self.transcriptionFailed = false
+                self.discardCurrentCapture = false
                 self.lastPresentedTranscriptionError = nil
                 self.setStatusIcon(.active)
                 SoundFeedback.playRecordingStarted()
@@ -118,10 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 let awaitingFinal = agent.stop()
-                if let message = self.pendingTranscriptionError {
-                    self.pendingTranscriptionError = nil
+                if self.transcriptionFailed {
                     self.setStatusIcon(.warning)
-                    self.presentTranscriptionError(message)
                 } else {
                     self.setStatusIcon(awaitingFinal ? .processing : .idle)
                 }
@@ -131,6 +134,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     guard let self, self.currentStatusIcon == .processing else { return }
                     self.setStatusIcon(.idle)
                 }
+            }
+        }
+        hotKey.onDiscard = { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                // A cancelled gesture must not type or copy anything from the
+                // discarded capture.
+                self.discardCurrentCapture = true
+                _ = self.agent?.stop()
+                if self.currentStatusIcon == .active { self.setStatusIcon(.idle) }
+                WhisttLog.event("capture discarded: shortcut gesture cancelled")
             }
         }
         hotKey.start()
@@ -179,21 +193,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             WhisttLog.error(msg)
             DispatchQueue.main.async {
                 guard let self else { return }
-                let wasRecording = self.currentStatusIcon == .active
+                self.transcriptionFailed = true
+                // Stop capturing immediately. Once the transport has failed,
+                // continuing to record only makes the user speak into a dead
+                // session and that audio cannot be recovered.
+                _ = self.agent?.stop()
                 self.setStatusIcon(.warning)
                 let message = self.userFacingTranscriptionError(from: msg)
-                if wasRecording {
-                    // Do not steal focus while push-to-talk is still held.
-                    self.pendingTranscriptionError = message
-                } else {
-                    self.presentTranscriptionError(message)
-                }
+                self.presentTranscriptionError(message)
             }
         }
         self.agent = agent
     }
 
     private func handle(delta: String) {
+        if discardCurrentCapture { return }
         switch outputMode {
         case .typing:
             TypingEmulator.type(delta)
@@ -205,6 +219,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleFinal(_ full: String) {
+        if discardCurrentCapture {
+            // The capture was cancelled; swallow the final transcript and
+            // re-enable normal output for the next hold.
+            discardCurrentCapture = false
+            WhisttLog.event("final transcript discarded (cancelled capture, \(full.count) chars)")
+            return
+        }
         switch outputMode {
         case .typing where !currentModelStreamsDeltas:
             TypingEmulator.type(full)
@@ -289,13 +310,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         modelHeader.submenu = modelSubmenu
         menu.addItem(modelHeader)
 
-        let shortcutTitle = currentHotKey.displayName
+        let shortcutTitle = currentBinding.displayName
         let shortcutHeader = NSMenuItem(title: "Shortcut: \(shortcutTitle)", action: nil, keyEquivalent: "")
         let shortcutSubmenu = NSMenu()
         for (idx, preset) in shortcutPresets.enumerated() {
             let it = NSMenuItem(title: preset.displayName, action: #selector(selectShortcut(_:)), keyEquivalent: "")
             it.target = self
-            it.state = (preset == currentHotKey) ? .on : .off
+            it.state = (preset == currentBinding) ? .on : .off
             it.tag = idx
             shortcutSubmenu.addItem(it)
         }
@@ -412,7 +433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func selectShortcut(_ sender: NSMenuItem) {
         let idx = sender.tag
         guard shortcutPresets.indices.contains(idx) else { return }
-        applyHotKey(shortcutPresets[idx])
+        applyBinding(shortcutPresets[idx])
     }
 
     @objc private func customizeShortcut(_ sender: NSMenuItem) {
@@ -424,13 +445,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func applyHotKey(_ newHotKey: HotKey) {
-        guard newHotKey != currentHotKey else { return }
-        WhisttLog.event("switching shortcut: \(currentHotKey.displayName) -> \(newHotKey.displayName)")
-        currentHotKey = newHotKey
-        UserDefaults.standard.set(NSNumber(value: newHotKey.keyCode), forKey: shortcutKeyCodeDefaultsKey)
-        UserDefaults.standard.set(NSNumber(value: newHotKey.modifiers.rawValue), forKey: shortcutModifiersDefaultsKey)
-        hotKey.updateHotKey(newHotKey)
+    private func applyBinding(_ newBinding: ShortcutBinding) {
+        guard newBinding != currentBinding else { return }
+        WhisttLog.event("switching shortcut: \(currentBinding.displayName) -> \(newBinding.displayName)")
+        currentBinding = newBinding
+        ShortcutBindingStore.save(newBinding, defaults: .standard)
+        hotKey.updateBinding(newBinding)
         rebuildMenu()
     }
 
@@ -439,16 +459,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKey.stop()
         defer { hotKey.start() }
 
+        // Remember the app the user was working in; reactivate it after Save or
+        // Cancel so dictation returns to the original target.
+        let previousApp = NSWorkspace.shared.frontmostApplication
         NSApp.activate(ignoringOtherApps: true)
+        defer {
+            previousApp?.activate(options: [])
+        }
 
         let alert = NSAlert()
         alert.messageText = "Record Shortcut"
-        alert.informativeText = "Press a combination with at least one of ⌘ ⌥ ⌃ ⇧.\nThen release the keys and click Save (or press Return)."
+        alert.informativeText = "Press a combination with at least one of ⌘ ⌥ ⌃ ⇧,\nor hold and release a single modifier key for push-to-talk.\nThen click Save (or press Return)."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
 
         let label = NSTextField(labelWithString: "Press a key combination…")
-        label.frame = NSRect(x: 0, y: 0, width: 360, height: 28)
+        label.frame = NSRect(x: 0, y: 0, width: 400, height: 28)
         label.alignment = .center
         label.font = NSFont.systemFont(ofSize: 16, weight: .medium)
         alert.accessoryView = label
@@ -456,7 +482,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let saveButton = alert.buttons[0]
         saveButton.isEnabled = false
 
-        var captured: HotKey?
+        var captured: ShortcutBinding?
+        // A single modifier currently held, waiting to become a modifier-only
+        // binding once released without any other key pressed in between.
+        var modifierCandidate: (keyCode: Int64, flag: UInt64)?
+        var otherKeyPressed = false
         let modifierSet: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
 
         let monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
@@ -467,20 +497,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             switch event.type {
             case .flagsChanged:
-                // Once something has been captured, leave the display alone so the user can
-                // release the keys without thinking the binding was lost.
+                let keyCode = Int64(event.keyCode)
+                let flag = ShortcutBinding.modifierFlag(forKeyCode: keyCode)
+
+                if let flag, event.modifierFlags.contains(Self.nsFlag(for: flag)) {
+                    // A modifier just went down. A modifier-only candidate is
+                    // only valid when that is the sole modifier held.
+                    let nsFlag = Self.nsFlag(for: flag)
+                    if captured == nil && modifierCandidate == nil && mods == nsFlag {
+                        modifierCandidate = (keyCode, flag)
+                        otherKeyPressed = false
+                        label.stringValue = "Hold \(ShortcutBinding.modifierKeyName(for: keyCode)) and release to capture…"
+                    } else if modifierCandidate != nil {
+                        // A second modifier invalidates the modifier-only candidate.
+                        modifierCandidate = nil
+                        label.stringValue = ShortcutBinding.modifierSymbols(for: cgFlags.rawValue) + " + …"
+                    }
+                    return nil
+                }
+                // A modifier went up.
+                if let candidate = modifierCandidate, candidate.keyCode == keyCode, !otherKeyPressed {
+                    captured = .modifierOnly(keyCode: candidate.keyCode, modifier: candidate.flag)
+                    modifierCandidate = nil
+                    label.stringValue = "Captured: \(captured!.displayName) (hold to talk)"
+                    saveButton.isEnabled = true
+                } else if modifierCandidate != nil {
+                    modifierCandidate = nil
+                }
                 if captured == nil {
                     if mods.isEmpty {
                         label.stringValue = "Press a key combination…"
                     } else {
-                        label.stringValue = HotKey.modifierSymbols(for: cgFlags) + " + …"
+                        label.stringValue = ShortcutBinding.modifierSymbols(for: cgFlags.rawValue) + " + …"
                     }
                 }
                 return nil
             case .keyDown:
+                if modifierCandidate != nil { otherKeyPressed = true }
                 guard !mods.isEmpty else { return event }
-                let hot = HotKey(keyCode: Int64(event.keyCode), modifiers: cgFlags)
+                let hot = ShortcutBinding.chord(keyCode: Int64(event.keyCode), modifiers: cgFlags.rawValue)
                 captured = hot
+                modifierCandidate = nil
                 label.stringValue = "Captured: \(hot.displayName)"
                 saveButton.isEnabled = true
                 return nil
@@ -491,8 +548,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         defer { if let m = monitor { NSEvent.removeMonitor(m) } }
 
         let response = alert.runModal()
-        guard response == .alertFirstButtonReturn, let hot = captured else { return }
-        applyHotKey(hot)
+        guard response == .alertFirstButtonReturn, let binding = captured, binding.isValid else { return }
+        applyBinding(binding)
+    }
+
+    private static func nsFlag(for cgFlag: UInt64) -> NSEvent.ModifierFlags {
+        switch cgFlag {
+        case CGEventFlags.maskCommand.rawValue: return .command
+        case CGEventFlags.maskControl.rawValue: return .control
+        case CGEventFlags.maskAlternate.rawValue: return .option
+        case CGEventFlags.maskShift.rawValue: return .shift
+        default: return []
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        hotKey.shutdown()
     }
 
     @objc private func setTyping(_ sender: NSMenuItem) {

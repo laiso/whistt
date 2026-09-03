@@ -34,6 +34,8 @@ let package = Package(
                 "TranscriptionProvider.swift",
                 "TranscriptionTransport.swift",
                 "AudioStreamSender.swift",
+                "ShortcutBinding.swift",
+                "ShortcutEngine.swift",
                 "RealtimeProtocol.swift",
                 "RealtimeWS.swift",
                 "GeminiLiveProtocol.swift",
