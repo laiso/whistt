@@ -8,7 +8,7 @@ WHISTT_BINARY := $(XCODE_DERIVED_DATA)/Build/Products/Debug/Whistt.app/Contents/
 
 build:
 	xcodebuild \
-		-project Whistt/Whistt.xcodeproj \
+		-workspace Whistt.xcworkspace \
 		-scheme Whistt \
 		-configuration Debug \
 		-derivedDataPath $(XCODE_DERIVED_DATA) \
