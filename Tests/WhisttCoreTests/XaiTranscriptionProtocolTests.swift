@@ -2,6 +2,22 @@ import XCTest
 @testable import WhisttCore
 
 final class XaiTranscriptionProtocolTests: XCTestCase {
+    func testDoneRepeatingLastChunkStillEmitsFinalAndMarksCompletion() {
+        let reducer = XaiTranscriptEventReducer()
+        _ = reducer.reduce(.partial(text: "完了しました", isFinal: true, speechFinal: false))
+
+        XCTAssertFalse(reducer.receivedDone)
+        XCTAssertEqual(reducer.reduce(.done(text: "完了しました")), [.final("完了しました")])
+        XCTAssertTrue(reducer.receivedDone)
+    }
+
+    func testChunkFinalDoesNotMarkStreamAsDone() {
+        let reducer = XaiTranscriptEventReducer()
+        _ = reducer.reduce(.partial(text: "途中まで", isFinal: true, speechFinal: false))
+
+        XCTAssertFalse(reducer.receivedDone)
+    }
+
     func testStreamURLUsesQueryParameterConfiguration() throws {
         let url = try XCTUnwrap(XaiTranscriptionFormat.streamURL())
         XCTAssertEqual(url.absoluteString, "wss://api.x.ai/v1/stt?encoding=pcm&sample_rate=16000&interim_results=true")

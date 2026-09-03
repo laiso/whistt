@@ -57,6 +57,67 @@ public enum XaiTranscriptionEvent: Equatable {
     }
 }
 
+/// Provider event state machine, kept separate from the WebSocket so complete
+/// event sequences can be covered by deterministic unit tests.
+public final class XaiTranscriptEventReducer {
+    public private(set) var confirmedText = ""
+    public private(set) var receivedDone = false
+
+    public init() {}
+
+    public func reduce(_ event: XaiTranscriptionEvent) -> [TranscriptionTransportEvent] {
+        switch event {
+        case .created:
+            return [.ready]
+        case .partial(let text, let isFinal, let speechFinal):
+            if isFinal {
+                let suffix: String?
+                if text.hasPrefix(confirmedText) {
+                    let start = text.index(text.startIndex, offsetBy: confirmedText.count)
+                    let tail = String(text[start...])
+                    suffix = tail.isEmpty ? nil : tail
+                } else {
+                    suffix = nil
+                }
+                confirmedText = text
+                var events: [TranscriptionTransportEvent] = [
+                    .revision(TranscriptRevision(
+                        confirmedText: confirmedText,
+                        interimText: "",
+                        appendSafeSuffix: suffix
+                    ))
+                ]
+                if speechFinal {
+                    events.append(.final(confirmedText))
+                    events.append(.turnComplete)
+                }
+                return events
+            }
+            return [.revision(TranscriptRevision(
+                confirmedText: confirmedText,
+                interimText: text
+            ))]
+        case .done(let text):
+            receivedDone = true
+            if !text.isEmpty { confirmedText = text }
+            // `done` is the authoritative end-of-stream notification. Emit a
+            // final even when it repeats the last chunk; downstream delivery
+            // is idempotent and non-typing consumers still need completion.
+            return [.final(confirmedText)]
+        case .error(let code, let message):
+            let suffix = code.map { " [\($0)]" } ?? ""
+            return [.unknown("xai.error\(suffix): \(message)")]
+        case .unknown(let type):
+            return [.unknown("xai.\(type)")]
+        }
+    }
+
+    public func reset() {
+        confirmedText = ""
+        receivedDone = false
+    }
+}
+
 public enum XaiTranscriptionFormat {
     /// xAI streams PCM16 mono at 16 kHz for this integration.
     public static let sampleRate = 16_000.0

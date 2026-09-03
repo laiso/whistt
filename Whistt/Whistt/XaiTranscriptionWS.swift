@@ -15,11 +15,7 @@ public final class XaiTranscriptionTransport: NSObject, TranscriptionTransport, 
     private var closing = false
     private var sender: AudioStreamSender?
     private var endInputSent = false
-    private var receivedFinalTranscript = false
-    /// Latest cumulative transcript text confirmed by the provider. Chunk
-    /// finals are cumulative snapshots (they may repeat earlier text), so the
-    /// suffix delivered to the output is a prefix diff, never a blind append.
-    private var confirmedText = ""
+    private let eventReducer = XaiTranscriptEventReducer()
 
     public init(apiKey: String, interimResults: Bool = true) {
         self.apiKey = apiKey
@@ -46,8 +42,7 @@ public final class XaiTranscriptionTransport: NSObject, TranscriptionTransport, 
         configured = false
         closing = false
         endInputSent = false
-        receivedFinalTranscript = false
-        confirmedText = ""
+        eventReducer.reset()
         sender = makeSender()
         task.resume()
         receiveLoop()
@@ -161,7 +156,7 @@ public final class XaiTranscriptionTransport: NSObject, TranscriptionTransport, 
             // xAI closes the connection itself after transcript.done; that is
             // the expected teardown for an explicitly ended stream, not a
             // failure. Anything else is reported so the app can recover.
-            guard !(self.endInputSent && self.receivedFinalTranscript) else { return }
+            guard !(self.endInputSent && self.eventReducer.receivedDone) else { return }
             let reasonText = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "<none>"
             self.onError?("xAI ws closed: code=\(closeCode.rawValue), reason=\(reasonText)")
         }
@@ -171,7 +166,7 @@ public final class XaiTranscriptionTransport: NSObject, TranscriptionTransport, 
     /// callback after the server ends the session; treat it as teardown when
     /// the stream was finished deliberately.
     private func isExpectedPostTranscriptClosure(_ error: Error) -> Bool {
-        guard endInputSent, receivedFinalTranscript else { return false }
+        guard endInputSent, eventReducer.receivedDone else { return false }
         let nsError = error as NSError
         return (nsError.domain == NSPOSIXErrorDomain && nsError.code == 57)
             || (nsError.domain == NSOSStatusErrorDomain && nsError.code == -9805)
@@ -183,50 +178,17 @@ public final class XaiTranscriptionTransport: NSObject, TranscriptionTransport, 
     }
 
     private func handle(_ event: XaiTranscriptionEvent) {
-        switch event {
-        case .created:
+        if case .created = event {
             markConfigured()
-        case .partial(let text, let isFinal, let speechFinal):
-            if isFinal {
-                receivedFinalTranscript = true
-                var suffix: String?
-                if text.hasPrefix(confirmedText) {
-                    // Cumulative snapshot: deliver only the new tail.
-                    let start = text.index(text.startIndex, offsetBy: confirmedText.count)
-                    suffix = String(text[start...])
-                } else {
-                    // The snapshot replaced earlier confirmed text; the buffer
-                    // corrects the cursor via prefix diff.
-                    suffix = nil
-                }
-                confirmedText = text
-                onEvent?(.revision(TranscriptRevision(
-                    confirmedText: confirmedText,
-                    interimText: "",
-                    appendSafeSuffix: (suffix?.isEmpty == false) ? suffix : nil
-                )))
-                if speechFinal {
-                    onEvent?(.final(confirmedText))
-                    onEvent?(.turnComplete)
-                }
-            } else {
-                onEvent?(.revision(TranscriptRevision(
-                    confirmedText: confirmedText,
-                    interimText: text,
-                    appendSafeSuffix: nil
-                )))
-            }
-        case .done(let text):
-            if !text.isEmpty && text != confirmedText {
-                receivedFinalTranscript = true
-                confirmedText = text
-                onEvent?(.final(text))
-            }
-        case .error(let code, let message):
+            return
+        }
+        if case .error(let code, let message) = event {
             let suffix = code.map { " [\($0)]" } ?? ""
             onError?("xAI\(suffix): \(message)")
-        case .unknown(let type):
-            onEvent?(.unknown("xai.\(type)"))
+            return
+        }
+        for outputEvent in eventReducer.reduce(event) {
+            onEvent?(outputEvent)
         }
     }
 

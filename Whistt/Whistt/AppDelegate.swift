@@ -34,7 +34,7 @@ private let modelGroups: [ModelGroup] = [
     ModelGroup(title: "Meta — final only", provider: .meta, streamsDeltas: false, models: [
         "muse-voice-transcribe-1.0",
     ]),
-    ModelGroup(title: "xAI — streaming", provider: .xAI, streamsDeltas: true, models: [
+    ModelGroup(title: "xAI — final only", provider: .xAI, streamsDeltas: false, models: [
         "xai-streaming-stt",
     ]),
 ]
@@ -234,10 +234,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         output(delta: delta)
     }
 
-    /// Cursor corrections for revision-streaming providers (xAI): erase the
-    /// superseded interim hypothesis and type the new text. Buffered while a
-    /// modifier-only capture is pending — the committed final transcript is
-    /// typed once at release, so partial corrections never reach the cursor.
+    /// Cursor corrections for providers that opt into visible revision
+    /// streaming. xAI currently keeps revisions internal and emits final only.
     private func handle(ops: [TranscriptOutputOp]) {
         guard !discardCurrentCapture else { return }
         guard !modifierOnlyCapturePending else { return }
@@ -419,6 +417,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func resolveAPIKey(for provider: TranscriptionProvider, promptIfMissing: Bool = true) -> String? {
         let account = provider.apiKeyAccount
+        // `make debug` opts into using the keys exported from the repository's
+        // .env without reading or updating Keychain. A missing environment key
+        // still falls back to the normal Keychain-based behavior.
+        if ProcessInfo.processInfo.environment["WHISTT_PREFER_ENV_API_KEYS"] == "1",
+           let environmentValue = ProcessInfo.processInfo.environment[account]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !environmentValue.isEmpty {
+            return environmentValue
+        }
         // The settings window writes to Keychain, so a saved value must be
         // authoritative. Environment and .env values are legacy/development
         // fallbacks used only to seed Keychain when no saved value exists.

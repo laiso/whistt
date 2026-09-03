@@ -18,10 +18,10 @@ final class TranscriptRevisionBufferTests: XCTestCase {
             buffer.apply(TranscriptRevision(confirmedText: "", interimText: "こんにち")),
             [.type("こんにち")]
         )
-        // Hypothesis revised itself: previous interim must be erased and retyped.
+        // Preserve the common prefix and append only the new tail.
         XCTAssertEqual(
             buffer.apply(TranscriptRevision(confirmedText: "", interimText: "こんにちは")),
-            [.erase(count: 4), .type("こんにちは")]
+            [.type("は")]
         )
         XCTAssertEqual(buffer.typedInterim, "こんにちは")
     }
@@ -33,7 +33,7 @@ final class TranscriptRevisionBufferTests: XCTestCase {
         let ops = buffer.apply(TranscriptRevision(
             confirmedText: "おはようございます", interimText: "", appendSafeSuffix: "おはようございます"
         ))
-        XCTAssertEqual(ops, [.erase(count: 5), .type("おはようございます")])
+        XCTAssertEqual(ops, [.type("ざいます")])
         XCTAssertEqual(buffer.typedConfirmedCount, 9)
         XCTAssertEqual(buffer.typedInterim, "")
     }
@@ -43,7 +43,7 @@ final class TranscriptRevisionBufferTests: XCTestCase {
         _ = buffer.apply(TranscriptRevision(confirmedText: "Hello", interimText: "wor"))
         // Confirmed text grows while an interim sits after it on the cursor.
         let ops = buffer.apply(TranscriptRevision(confirmedText: "Hello world,", interimText: "agai"))
-        XCTAssertEqual(ops, [.erase(count: 3), .type(" world,"), .type("agai")])
+        XCTAssertEqual(ops, [.erase(count: 3), .type(" world,agai")])
     }
 
     func testFinalDropsTypedInterimAndTypesRemainder() {
@@ -58,7 +58,7 @@ final class TranscriptRevisionBufferTests: XCTestCase {
         let buffer = TranscriptRevisionBuffer()
         _ = buffer.apply(TranscriptRevision(confirmedText: "abc", interimText: "de"))
         let ops = buffer.applyFinal("xy")
-        XCTAssertEqual(ops, [.erase(count: 2), .erase(count: 3), .type("xy")])
+        XCTAssertEqual(ops, [.erase(count: 5), .type("xy")])
     }
 
     func testResetDropsTrackingState() {

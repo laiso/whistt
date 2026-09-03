@@ -31,7 +31,7 @@ Most voice-input apps hide the transcription model behind their service. Whistt 
    <img src="assets/accessibility.png" alt="Accessibility settings with Whistt enabled" width="360">
 4. Hold ⌥+Space, speak, release — text appears at your cursor.
 
-Switch between **Type at cursor** / **Clipboard** output and pick a transcription model from the menu bar. OpenAI uses the realtime-only `gpt-realtime-whisper`. Gemini uses `gemini-3.5-transcribe-live`, Japanese (`ja-JP`), and manual push-to-talk VAD. Its interim hypotheses are not typed because they can revise earlier text; only finalized text is inserted. xAI uses `wss://api.x.ai/v1/stt` streaming with `interim_results=true`: while you speak, the interim hypothesis is typed at the cursor and corrected (erased and retyped) as the hypothesis revises; finalized chunk text is delivered exactly once.
+Switch between **Type at cursor** / **Clipboard** output and pick a transcription model from the menu bar. OpenAI uses the realtime-only `gpt-realtime-whisper`. Gemini uses `gemini-3.5-transcribe-live`, Japanese (`ja-JP`), and manual push-to-talk VAD. Its interim hypotheses are not typed because they can revise earlier text; only finalized text is inserted. xAI receives streaming revisions from `wss://api.x.ai/v1/stt`, but keeps them internal and inserts only the final transcript once recording finishes.
 
 Open **API Keys…** from the menu to add, replace, or remove keys for OpenAI, Gemini, Meta, and xAI in one place. For local development, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `META_API_KEY`, and `XAI_API_KEY` can be supplied through process environment variables or `.env`; the selected provider's key is migrated to Keychain on first use.
 

@@ -41,7 +41,7 @@ public enum TranscriptOutputOp: Equatable {
 public final class TranscriptRevisionBuffer {
     private var _typedConfirmedCount = 0
     private var _typedInterim: String = ""
-    private var _confirmedText = ""
+    private var _typedText = ""
 
     /// Characters of confirmed transcript text typed so far.
     public var typedConfirmedCount: Int { _typedConfirmedCount }
@@ -53,73 +53,35 @@ public final class TranscriptRevisionBuffer {
     /// Apply a provider revision and return the operations needed to make the
     /// cursor output match it.
     public func apply(_ revision: TranscriptRevision) -> [TranscriptOutputOp] {
-        var ops: [TranscriptOutputOp] = []
-
-        if let suffix = revision.appendSafeSuffix {
-            // Append-only provider: everything received is safe to type in
-            // order. Any typed interim must go first so the suffix lands
-            // directly after the confirmed text.
-            guard !suffix.isEmpty else { return [] }
-            if !_typedInterim.isEmpty {
-                ops.append(.erase(count: _typedInterim.count))
-                _typedInterim = ""
-            }
-            _confirmedText += suffix
-            _typedConfirmedCount += suffix.count
-            ops.append(.type(suffix))
-            return ops
-        }
-
-        var opsPrepared: [TranscriptOutputOp] = []
-        if !_typedInterim.isEmpty {
-            opsPrepared.append(.erase(count: _typedInterim.count))
-            _typedInterim = ""
-        }
-        let confirmed = revision.confirmedText
-        // Align the typed confirmed text with the provider's view. Only the
-        // characters that still match may be kept; a snapshot that differs
-        // mid-stream (e.g. a cumulative chunk that replaces earlier text) is
-        // corrected by erasing back to the shared prefix and retyping.
-        let keep = min(_typedConfirmedCount, commonPrefixCount(_confirmedText, confirmed))
-        if keep < _typedConfirmedCount {
-            opsPrepared.append(.erase(count: _typedConfirmedCount - keep))
-        }
-        if confirmed.count > keep {
-            let start = confirmed.index(confirmed.startIndex, offsetBy: keep)
-            let suffix = String(confirmed[start...])
-            opsPrepared.append(.type(suffix))
-        }
-        _typedConfirmedCount = confirmed.count
-        if !revision.interimText.isEmpty {
-            opsPrepared.append(.type(revision.interimText))
-            _typedInterim = revision.interimText
-        }
-        _confirmedText = confirmed
-        ops = opsPrepared
+        let desiredText = revision.confirmedText + revision.interimText
+        let ops = reconcileTypedText(with: desiredText)
+        _typedConfirmedCount = revision.confirmedText.count
+        _typedInterim = revision.interimText
         return ops
     }
 
     /// Apply the session's final transcript: drop any typed interim and type
     /// whatever part of the final text has not been typed yet.
     public func applyFinal(_ text: String) -> [TranscriptOutputOp] {
-        var ops: [TranscriptOutputOp] = []
-        if !_typedInterim.isEmpty {
-            ops.append(.erase(count: _typedInterim.count))
-            _typedInterim = ""
-        }
-        // Same prefix-diff alignment as revisions: keep only the typed
-        // characters that survive in the final text.
-        let keep = min(_typedConfirmedCount, commonPrefixCount(_confirmedText, text))
-        if keep < _typedConfirmedCount {
-            ops.append(.erase(count: _typedConfirmedCount - keep))
-        }
-        if text.count > keep {
-            let start = text.index(text.startIndex, offsetBy: keep)
-            let suffix = String(text[start...])
-            ops.append(.type(suffix))
-        }
+        let ops = reconcileTypedText(with: text)
         _typedConfirmedCount = text.count
-        _confirmedText = text
+        _typedInterim = ""
+        return ops
+    }
+
+    /// Keep the common visible prefix and replace only the changed tail. This
+    /// avoids a full erase/retype flash when an interim becomes final.
+    private func reconcileTypedText(with desiredText: String) -> [TranscriptOutputOp] {
+        let keep = commonPrefixCount(_typedText, desiredText)
+        var ops: [TranscriptOutputOp] = []
+        if keep < _typedText.count {
+            ops.append(.erase(count: _typedText.count - keep))
+        }
+        if keep < desiredText.count {
+            let start = desiredText.index(desiredText.startIndex, offsetBy: keep)
+            ops.append(.type(String(desiredText[start...])))
+        }
+        _typedText = desiredText
         return ops
     }
 
@@ -140,6 +102,6 @@ public final class TranscriptRevisionBuffer {
     public func reset() {
         _typedConfirmedCount = 0
         _typedInterim = ""
-        _confirmedText = ""
+        _typedText = ""
     }
 }
