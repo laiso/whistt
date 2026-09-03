@@ -3,6 +3,7 @@
 Package.resolved
 .DS_Store
 .env
+debug.log
 
 # Xcode per-user state. Shared scheme lives under xcshareddata/ and IS tracked.
 xcuserdata/

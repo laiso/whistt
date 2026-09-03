@@ -73,6 +73,23 @@ Releases are distributed **unsigned**, so the first launch from `/Applications/`
 - **Key dialog reappears** — the Keychain entry is missing or empty; paste the key again.
 - **Gemini finishes but no text appears** — confirm that `gemini-3.5-transcribe-live` is selected and the Gemini key has Live API access.
 
+### Local diagnostics
+
+Build and launch the Debug app while showing its logs in the terminal and saving them to `debug.log`:
+
+```bash
+make debug
+```
+
+The command loads `.env` when present. Stop the app with Control-C. `debug.log` is local-only and ignored by Git.
+
+Other development commands:
+
+```bash
+make build
+make test
+```
+
 ## Gemini Live API probe
 
 The end-to-end probe sends raw PCM16LE, 16 kHz, mono audio through the same Gemini wire protocol used by the app:
