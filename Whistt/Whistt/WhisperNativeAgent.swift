@@ -17,6 +17,10 @@ final class WhisperNativeAgent: NSObject {
     private var connectStartedAt: TimeInterval?
     private var inputEndedAt: TimeInterval?
     private var firstTranscriptLogged = false
+    // Results from a transport may arrive during its deferred close. Associate
+    // every transport callback with the start that created it so an older
+    // capture can never be delivered into a newer one.
+    private var sessionGeneration = 0
     private static let finalGraceSeconds: TimeInterval = 5.0
 
     var onTranscriptDelta: ((String) -> Void)?
@@ -40,6 +44,8 @@ final class WhisperNativeAgent: NSObject {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        sessionGeneration += 1
+        let generation = sessionGeneration
         resetBytes()
         lastDeliveredTranscript = nil
         sessionStartedAt = ProcessInfo.processInfo.systemUptime
@@ -49,6 +55,7 @@ final class WhisperNativeAgent: NSObject {
         AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
             DispatchQueue.main.async {
                 guard let self = self else { return }
+                guard generation == self.sessionGeneration else { return }
                 guard granted else {
                     self.isRunning = false
                     self.onError?("microphone permission denied — enable in System Settings → Privacy & Security → Microphone")
@@ -57,7 +64,7 @@ final class WhisperNativeAgent: NSObject {
                 // User may have released the hotkey before the (async) permission prompt resolved —
                 // don't open a socket for a session that's already been cancelled.
                 guard self.isRunning else { return }
-                self.connect()
+                self.connect(generation: generation)
                 self.startAudio()
             }
         }
@@ -97,7 +104,7 @@ final class WhisperNativeAgent: NSObject {
         return awaitsFinalTranscript
     }
 
-    private func connect() {
+    private func connect(generation: Int) {
         connectStartedAt = ProcessInfo.processInfo.systemUptime
         WhisttLog.event("connecting (provider=\(provider.rawValue), model=\(model))")
         // stop() releases the previous transport. A fresh start creates the selected
@@ -106,10 +113,16 @@ final class WhisperNativeAgent: NSObject {
             transport = TranscriptionTransportFactory.make(provider: provider, apiKey: apiKey, model: model)
         }
         transport?.onEvent = { [weak self] event in
-            DispatchQueue.main.async { self?.handle(event) }
+            DispatchQueue.main.async {
+                guard let self, generation == self.sessionGeneration else { return }
+                self.handle(event)
+            }
         }
         transport?.onError = { [weak self] message in
-            DispatchQueue.main.async { self?.onError?(message) }
+            DispatchQueue.main.async {
+                guard let self, generation == self.sessionGeneration else { return }
+                self.onError?(message)
+            }
         }
         transport?.connect()
     }

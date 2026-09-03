@@ -115,6 +115,43 @@ final class ShortcutEngineTests: XCTestCase {
         XCTAssertEqual(h.discards, 0)
     }
 
+    func testBoundControlReleaseStopsWhileOppositeControlRemainsHeld() {
+        let h = Harness(binding: leftControl)
+        h.modifierDown(leftControl)
+        // Right Control changes the aggregate flags but is not the bound key.
+        _ = h.engine.modifierChanged(
+            keyCode: rightControl.keyCode,
+            flags: CGEventFlags.maskControl.rawValue
+        )
+        h.scheduler.fireAfter(0.2)
+        XCTAssertEqual(h.starts, 1)
+
+        // Releasing Left Control still leaves maskControl set because Right
+        // Control remains down. The physical key transition must win.
+        _ = h.engine.modifierChanged(
+            keyCode: leftControl.keyCode,
+            flags: CGEventFlags.maskControl.rawValue
+        )
+        XCTAssertEqual(h.stops, 1)
+        XCTAssertEqual(h.state, .idle)
+    }
+
+    func testBoundControlReleaseCancelsArmedHoldWhileOppositeRemainsHeld() {
+        let h = Harness(binding: leftControl)
+        h.modifierDown(leftControl)
+        _ = h.engine.modifierChanged(
+            keyCode: rightControl.keyCode,
+            flags: CGEventFlags.maskControl.rawValue
+        )
+        _ = h.engine.modifierChanged(
+            keyCode: leftControl.keyCode,
+            flags: CGEventFlags.maskControl.rawValue
+        )
+        h.scheduler.fireAfter(0.2)
+        XCTAssertEqual(h.starts, 0)
+        XCTAssertEqual(h.state, .idle)
+    }
+
     func testRemappedCapsLockArrivingAsControlMatches() {
         // Karabiner-style remap: the physical Caps Lock key (57) arrives as a
         // Control modifier event with Control's key code (59).
@@ -192,6 +229,18 @@ final class ShortcutEngineTests: XCTestCase {
         let h = Harness(binding: chord)
         _ = h.engine.keyDown(keyCode: 8, flags: CGEventFlags.maskControl.rawValue)
         _ = h.engine.modifierChanged(keyCode: 59, flags: 0) // Control released
+        XCTAssertEqual(h.stops, 1)
+    }
+
+    func testChordModifierReleaseStillSwallowsMatchingKeyUp() {
+        let h = Harness(binding: chord)
+        XCTAssertTrue(h.engine.keyDown(
+            keyCode: 8,
+            flags: CGEventFlags.maskControl.rawValue
+        ))
+        _ = h.engine.modifierChanged(keyCode: 59, flags: 0)
+        XCTAssertEqual(h.stops, 1)
+        XCTAssertTrue(h.engine.keyUp(keyCode: 8, flags: 0))
         XCTAssertEqual(h.stops, 1)
     }
 

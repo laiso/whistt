@@ -62,9 +62,13 @@ public final class ShortcutEngine {
     public private(set) var binding: ShortcutBinding
     // Guards the hold timer: a stale fire must not start a later recording.
     private var attempt = 0
-    // Chord bookkeeping: the key-down was swallowed and its key-up must stop
-    // the recording even if the modifier was released first.
-    private var chordKeyDownSwallowed = false
+    // Chord bookkeeping: the key-down was swallowed and its key-up must remain
+    // swallowed even when releasing a modifier already stopped recording.
+    private var chordKeyUpPending = false
+    // Modifier flags aggregate left and right variants. Track the configured
+    // physical key's transitions separately so releasing Left Control while
+    // Right Control remains held is still recognized as a release.
+    private var boundModifierKeyDown = false
 
     public init(
         binding: ShortcutBinding,
@@ -79,6 +83,8 @@ public final class ShortcutEngine {
     public func updateBinding(_ newBinding: ShortcutBinding) {
         guard newBinding != binding else { return }
         cancelGesture(reason: "binding change")
+        chordKeyUpPending = false
+        boundModifierKeyDown = false
         binding = newBinding
     }
 
@@ -92,8 +98,7 @@ public final class ShortcutEngine {
             // Preserve chord behavior: releasing the required modifiers while
             // the push-to-talk key is still down stops the recording.
             let nowHeld = flags & required == required
-            if chordKeyDownSwallowed && !nowHeld {
-                chordKeyDownSwallowed = false
+            if chordKeyUpPending && !nowHeld {
                 if state == .recording {
                     state = .idle
                     onStop?()
@@ -103,7 +108,20 @@ public final class ShortcutEngine {
             guard keyCode == boundKeyCode,
                   let flag = ShortcutBinding.modifierFlag(forKeyCode: keyCode),
                   flag == boundModifier else { return false }
-            let isDown = flags & boundModifier != 0
+            // A flagsChanged event for the bound key is a transition of that
+            // key. Do not infer release solely from the aggregate flag because
+            // the opposite-side modifier may keep it set.
+            let isDown: Bool
+            if boundModifierKeyDown {
+                isDown = false
+                boundModifierKeyDown = false
+            } else {
+                // Ignore an unmatched up event (for example immediately after
+                // changing bindings while the new key was already held).
+                guard flags & boundModifier != 0 else { return false }
+                isDown = true
+                boundModifierKeyDown = true
+            }
             if isDown {
                 if state == .idle {
                     state = .armed
@@ -136,8 +154,8 @@ public final class ShortcutEngine {
             guard keyCode == boundKeyCode,
                   required != 0,
                   flags & required == required else { return false }
-            if !chordKeyDownSwallowed {
-                chordKeyDownSwallowed = true
+            if !chordKeyUpPending {
+                chordKeyUpPending = true
                 state = .recording
                 onStart?()
             }
@@ -162,8 +180,8 @@ public final class ShortcutEngine {
     public func keyUp(keyCode: Int64, flags: UInt64) -> Bool {
         switch binding {
         case .chord(let boundKeyCode, _):
-            guard keyCode == boundKeyCode, chordKeyDownSwallowed else { return false }
-            chordKeyDownSwallowed = false
+            guard keyCode == boundKeyCode, chordKeyUpPending else { return false }
+            chordKeyUpPending = false
             if state == .recording {
                 state = .idle
                 onStop?()
@@ -190,11 +208,15 @@ public final class ShortcutEngine {
     /// modifier-only gesture exactly once; chord state is cleared too.
     public func tapDisabled() {
         cancelGesture(reason: "event tap disabled")
+        chordKeyUpPending = false
+        boundModifierKeyDown = false
     }
 
     /// Application shutdown.
     public func shutdown() {
         cancelGesture(reason: "app shutdown")
+        chordKeyUpPending = false
+        boundModifierKeyDown = false
     }
 
     private func holdTimerFired(attempt firedAttempt: Int) {
@@ -210,7 +232,6 @@ public final class ShortcutEngine {
         cancelHoldTimer()
         let wasRecording = state == .recording
         state = .idle
-        chordKeyDownSwallowed = false
         if wasRecording {
             onDiscard?()
             onDiagnostic?("shortcut gesture cancelled (\(reason)); capture discarded")

@@ -69,6 +69,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Set when a cancelled shortcut gesture discards an in-flight capture;
     // its pending deltas and final transcript are ignored.
     private var discardCurrentCapture = false
+    // Modifier-only gestures remain cancellable until the modifier is released.
+    // Keep their output local so a later Control-C/mouse press cannot leave
+    // already-typed text behind.
+    private var modifierOnlyCapturePending = false
+    private var bufferedModifierOnlyDeltas = ""
+    private var bufferedModifierOnlyFinals: [String] = []
     private lazy var apiKeysWindowController: APIKeysWindowController = {
         let controller = APIKeysWindowController()
         controller.onKeysChanged = { [weak self] in
@@ -109,6 +115,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self.transcriptionFailed = false
                 self.discardCurrentCapture = false
+                self.modifierOnlyCapturePending = self.currentBinding.isModifierOnly
+                self.bufferedModifierOnlyDeltas = ""
+                self.bufferedModifierOnlyFinals.removeAll(keepingCapacity: true)
                 self.lastPresentedTranscriptionError = nil
                 self.setStatusIcon(.active)
                 SoundFeedback.playRecordingStarted()
@@ -122,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.setStatusIcon(.warning)
                     return
                 }
+                self.commitModifierOnlyOutputIfNeeded()
                 let awaitingFinal = agent.stop()
                 if self.transcriptionFailed {
                     self.setStatusIcon(.warning)
@@ -142,6 +152,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // A cancelled gesture must not type or copy anything from the
                 // discarded capture.
                 self.discardCurrentCapture = true
+                self.modifierOnlyCapturePending = false
+                self.bufferedModifierOnlyDeltas = ""
+                self.bufferedModifierOnlyFinals.removeAll(keepingCapacity: true)
                 _ = self.agent?.stop()
                 if self.currentStatusIcon == .active { self.setStatusIcon(.idle) }
                 WhisttLog.event("capture discarded: shortcut gesture cancelled")
@@ -208,6 +221,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handle(delta: String) {
         if discardCurrentCapture { return }
+        if modifierOnlyCapturePending {
+            bufferedModifierOnlyDeltas += delta
+            return
+        }
+        output(delta: delta)
+    }
+
+    private func output(delta: String) {
         switch outputMode {
         case .typing:
             TypingEmulator.type(delta)
@@ -220,12 +241,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleFinal(_ full: String) {
         if discardCurrentCapture {
-            // The capture was cancelled; swallow the final transcript and
-            // re-enable normal output for the next hold.
-            discardCurrentCapture = false
+            // The capture was cancelled; keep swallowing every result from
+            // this session. The next successful onStart resets the flag after
+            // WhisperNativeAgent has advanced its session generation.
             WhisttLog.event("final transcript discarded (cancelled capture, \(full.count) chars)")
             return
         }
+        if modifierOnlyCapturePending {
+            bufferedModifierOnlyFinals.append(full)
+            return
+        }
+        outputFinal(full)
+    }
+
+    private func outputFinal(_ full: String) {
         switch outputMode {
         case .typing where !currentModelStreamsDeltas:
             TypingEmulator.type(full)
@@ -238,6 +267,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         WhisttLog.event("timing provider=\(currentProvider.rawValue) milestone=output_applied mode=\(outputMode.rawValue) chars=\(full.count)")
         if currentStatusIcon != .active { setStatusIcon(.idle) }
+    }
+
+    private func commitModifierOnlyOutputIfNeeded() {
+        guard modifierOnlyCapturePending else { return }
+        modifierOnlyCapturePending = false
+
+        if !bufferedModifierOnlyDeltas.isEmpty {
+            output(delta: bufferedModifierOnlyDeltas)
+        }
+        bufferedModifierOnlyDeltas = ""
+
+        let finals = bufferedModifierOnlyFinals
+        bufferedModifierOnlyFinals.removeAll(keepingCapacity: true)
+        finals.forEach(outputFinal)
     }
 
     private func setupStatusItem() {
@@ -500,6 +543,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let keyCode = Int64(event.keyCode)
                 let flag = ShortcutBinding.modifierFlag(forKeyCode: keyCode)
 
+                // `modifierFlags` combines left and right variants. Once this
+                // exact key is the candidate, its next flagsChanged event is
+                // its release even if the opposite-side key keeps the shared
+                // flag set.
+                if let candidate = modifierCandidate, candidate.keyCode == keyCode {
+                    if !otherKeyPressed {
+                        captured = .modifierOnly(keyCode: candidate.keyCode, modifier: candidate.flag)
+                        label.stringValue = "Captured: \(captured!.displayName) (hold to talk)"
+                        saveButton.isEnabled = true
+                    }
+                    modifierCandidate = nil
+                    return nil
+                }
+
                 if let flag, event.modifierFlags.contains(Self.nsFlag(for: flag)) {
                     // A modifier just went down. A modifier-only candidate is
                     // only valid when that is the sole modifier held.
@@ -516,12 +573,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return nil
                 }
                 // A modifier went up.
-                if let candidate = modifierCandidate, candidate.keyCode == keyCode, !otherKeyPressed {
-                    captured = .modifierOnly(keyCode: candidate.keyCode, modifier: candidate.flag)
-                    modifierCandidate = nil
-                    label.stringValue = "Captured: \(captured!.displayName) (hold to talk)"
-                    saveButton.isEnabled = true
-                } else if modifierCandidate != nil {
+                if modifierCandidate != nil {
                     modifierCandidate = nil
                 }
                 if captured == nil {
