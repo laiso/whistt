@@ -34,6 +34,7 @@ let package = Package(
                 "AppPreferences.swift",
                 "EnvLoader.swift",
                 "KeychainStore.swift",
+                "ProviderConfigurationService.swift",
                 "TranscriptionProvider.swift",
                 "TranscriptionTransport.swift",
                 "AudioStreamSender.swift",

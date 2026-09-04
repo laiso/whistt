@@ -66,11 +66,7 @@ enum SettingsTab: String, Hashable {
     case providers
 }
 
-enum ProviderConfigurationStatus {
-    case configured
-    case notConfigured
-    case endpointMissing
-
+extension ProviderConfigurationStatus {
     var title: String {
         switch self {
         case .configured: return "Configured"
@@ -92,6 +88,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var selectedSettingsTab: SettingsTab = .general
     @Published private(set) var providerConfigurationRevision = 0
     private lazy var settingsWindowController = SettingsWindowController(appDelegate: self)
+    private lazy var providerConfiguration = ProviderConfigurationService(
+        containsKey: { KeychainStore.contains(account: $0) },
+        saveKey: { KeychainStore.set($0, for: $1) },
+        deleteKey: { KeychainStore.delete(for: $0) },
+        storedAzureEndpoint: { AzureVoiceLiveSettings.storedEndpoint() },
+        resolvedAzureEndpoint: { AzureVoiceLiveSettings.resolveEndpoint() },
+        saveAzureEndpoint: { AzureVoiceLiveSettings.saveEndpoint($0) },
+        removeAzureEndpoint: { AzureVoiceLiveSettings.removeEndpoint() }
+    )
     private var currentStatusIcon: StatusIcon = .idle
     private var transcriptionFailed = false
     private var lastPresentedTranscriptionError: String?
@@ -740,17 +745,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func providerConfigurationStatus(for provider: TranscriptionProvider) -> ProviderConfigurationStatus {
-        let hasKey = KeychainStore.contains(account: provider.apiKeyAccount)
-        guard provider == .azure else {
-            return hasKey ? .configured : .notConfigured
-        }
-        guard hasKey else { return .notConfigured }
-        return AzureVoiceLiveSettings.resolveEndpoint() == nil ? .endpointMissing : .configured
+        providerConfiguration.status(for: provider)
     }
 
     func hasProviderConfiguration(for provider: TranscriptionProvider) -> Bool {
-        if KeychainStore.contains(account: provider.apiKeyAccount) { return true }
-        return provider == .azure && AzureVoiceLiveSettings.storedEndpoint() != nil
+        providerConfiguration.hasConfiguration(for: provider)
     }
 
     func storedAzureEndpoint() -> String {
@@ -762,45 +761,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         apiKey rawAPIKey: String,
         azureEndpoint rawEndpoint: String
     ) -> String? {
-        let apiKey = rawAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasStoredKey = KeychainStore.contains(account: provider.apiKeyAccount)
-        let normalizedAzureEndpoint: String?
-
-        if apiKey.isEmpty && !hasStoredKey {
-            return "Enter an API key."
+        switch providerConfiguration.save(
+            provider: provider,
+            rawAPIKey: rawAPIKey,
+            rawAzureEndpoint: rawEndpoint
+        ) {
+        case .success:
+            reloadCurrentAPIKey()
+            return nil
+        case .failure(let error):
+            return providerConfigurationMessage(for: error)
         }
-
-        if provider == .azure {
-            let endpoint = rawEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !endpoint.isEmpty else { return "Enter the Azure Voice Live endpoint." }
-            guard let normalized = AzureVoiceLiveSettings.normalizedEndpoint(endpoint) else {
-                return "Enter an https:// URL with a host name, such as https://<resource>.services.ai.azure.com/."
-            }
-            normalizedAzureEndpoint = normalized
-        } else {
-            normalizedAzureEndpoint = nil
-        }
-
-        if !apiKey.isEmpty && !KeychainStore.set(apiKey, for: provider.apiKeyAccount) {
-            return "Could not save the key to the macOS Keychain."
-        }
-        if let normalizedAzureEndpoint {
-            AzureVoiceLiveSettings.saveEndpoint(normalizedAzureEndpoint)
-        }
-
-        reloadCurrentAPIKey()
-        return nil
     }
 
     func removeProviderConfiguration(for provider: TranscriptionProvider) -> String? {
-        guard KeychainStore.delete(for: provider.apiKeyAccount) else {
-            return "Could not remove the key from the macOS Keychain."
+        switch providerConfiguration.remove(provider: provider) {
+        case .success:
+            reloadCurrentAPIKey()
+            return nil
+        case .failure(let error):
+            return providerConfigurationMessage(for: error)
         }
-        if provider == .azure {
-            AzureVoiceLiveSettings.removeEndpoint()
+    }
+
+    private func providerConfigurationMessage(for error: ProviderConfigurationError) -> String {
+        switch error {
+        case .apiKeyMissing: return "Enter an API key."
+        case .endpointMissing: return "Enter the Azure Voice Live endpoint."
+        case .endpointInvalid:
+            return "Enter an https:// URL with a host name, such as https://<resource>.services.ai.azure.com/."
+        case .keySaveFailed: return "Could not save the key to the macOS Keychain."
+        case .keyDeleteFailed: return "Could not remove the key from the macOS Keychain."
         }
-        reloadCurrentAPIKey()
-        return nil
     }
 
     func suspendShortcutHandling() {

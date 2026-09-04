@@ -9,32 +9,31 @@
 - Whistt shall never display an API key that is already stored in Keychain.
 - When the selected provider is incomplete, Whistt shall open Settings on the Providers tab.
 
-## Acceptance scenarios
+## Automated coverage
+
+- `AppPreferencesTests` verifies output-mode and recording-start-sound defaults and persistence.
+- `ProviderConfigurationServiceTests` verifies API-key preservation, Azure endpoint validation and normalization, mutation ordering, configuration status, failure behavior, and removal.
+- `ShortcutEngineTests` verifies shortcut persistence and the recording lifecycle independently of the macOS UI.
+
+Run `swift test` for this coverage. The scenarios below are limited to behavior that crosses the real macOS UI or system services and is not covered by the package tests.
+
+## Manual end-to-end scenarios
 
 ```gherkin
 Feature: Native application settings
 
-  Scenario: Change a quick setting from either surface
+  Scenario: Settings and status menu stay synchronized
     Given Whistt is running
     When the user changes Output or Model in Settings
     Then the status menu reflects the same selection
-    And the new value is used immediately
-
     When the user changes the same setting in the status menu
     Then Settings reflects that selection
 
-  Scenario: Configure a provider securely
+  Scenario: Configure a provider without revealing its secret
     When the user opens Settings and selects Providers
     And configures a provider with a valid API key
     Then the provider status becomes Configured
     And the stored API key is not displayed
-
-  Scenario: Restore persistent preferences
-    Given the user selected Clipboard output
-    And disabled the recording-start sound
-    When Whistt is quit and relaunched
-    Then Clipboard remains selected
-    And the recording-start sound remains disabled
 
   Scenario: Approve launch at login in System Settings
     Given launch at login requires approval
