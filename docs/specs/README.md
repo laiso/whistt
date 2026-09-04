@@ -5,6 +5,5 @@ Specifications define current behavior, external contracts, and observable accep
 | Area | Specification | Acceptance format |
 | --- | --- | --- |
 | Global shortcuts | [Hotkeys](hotkeys.md) | EARS requirements and Gherkin scenarios |
-| Subscription authentication | [ChatGPT subscription integration](chatgpt-subscription-integration.md) | Design constraints and testing plan |
 
 Add a specification only when code and tests alone do not communicate the contract clearly. Historical decisions are supporting context, not current requirements.
