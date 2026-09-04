@@ -20,15 +20,45 @@ Bring your own API key and switch between OpenAI Realtime, Google Gemini Live, M
 
 Reference prices as of September 2026. `gpt-transcribe` is not yet selectable in Whistt's model menu.
 
-## Run
+## Requirements
 
-Requires macOS 26.2+ and Xcode 16+.
+- macOS 26.2+
+- An API key for [OpenAI](https://platform.openai.com/api-keys), [Gemini](https://aistudio.google.com/app/apikey), [Meta](https://dev.meta.ai/), or [xAI](https://console.x.ai/)
 
-1. Open `Whistt/Whistt.xcodeproj` and press ⌘R.
-2. Add a provider API key when prompted.
-3. Grant Microphone and Accessibility permissions.
+## Install
 
-Development commands:
+Download the latest unsigned build from [GitHub Releases](https://github.com/laiso/whistt/releases) and move Whistt to `/Applications`.
+
+On first launch, macOS may block the app. Open **System Settings → Privacy & Security** and select **Open Anyway**.
+
+<img src="assets/open-anyway.png" alt="Open Anyway in Privacy & Security" width="500">
+
+## Set up and use
+
+1. Add an API key when prompted.
+
+   <img src="assets/api-key-dialog.png" alt="API key prompt" width="360">
+
+2. Grant **Microphone** and **Accessibility** permissions in System Settings, then relaunch Whistt.
+
+   <img src="assets/accessibility.png" alt="Whistt in Accessibility settings" width="360">
+
+3. Hold **⌥ Option + Space**, speak, and release.
+
+Use the menu bar to select a provider and switch between typing at the cursor and copying to the clipboard.
+
+<img src="assets/menu-bar.png" alt="Whistt menu bar controls" width="500">
+
+## Troubleshooting
+
+- **No text appears** — grant Accessibility permission to Whistt.
+- **The shortcut appears in the focused app** — check Accessibility permission. Whistt recovers automatically after permission is granted.
+- **The API key prompt reappears** — add the selected provider's key again.
+- **Gemini returns no text** — confirm the Gemini key has Live API access.
+
+## Develop
+
+Open `Whistt/Whistt.xcodeproj` in Xcode, or use:
 
 ```sh
 make build
@@ -36,9 +66,4 @@ make test
 make debug
 ```
 
-Unsigned builds are available from [GitHub Releases](https://github.com/laiso/whistt/releases). On first launch, allow Whistt from **System Settings → Privacy & Security**.
-
-## Documentation
-
-- [Technical specifications](docs/specs/)
-- Historical decisions are stored in the project-local `whistt-decisions` skill.
+Technical contracts live in [`docs/specs`](docs/specs/). Historical decisions are stored in the project-local `whistt-decisions` skill.
