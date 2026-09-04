@@ -1,10 +1,10 @@
-# Specifications
+# Technical specifications
 
-Specifications combine current requirements with observable acceptance scenarios.
+Specifications define current behavior, external contracts, and observable acceptance criteria for one feature or technical capability. They are working documents for agents changing that area, not a general architecture guide.
 
 | Area | Specification | Acceptance format |
 | --- | --- | --- |
 | Global shortcuts | [Hotkeys](hotkeys.md) | EARS requirements and Gherkin scenarios |
 | Subscription authentication | [ChatGPT subscription integration](chatgpt-subscription-integration.md) | Design constraints and testing plan |
 
-Historical decisions are supporting context, not current requirements.
+Add a specification only when code and tests alone do not communicate the contract clearly. Historical decisions are supporting context, not current requirements.

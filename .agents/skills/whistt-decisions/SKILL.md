@@ -14,5 +14,8 @@ Read only the reference whose area overlaps the task. Do not load every decision
 | Order | Date | Status | Decision | Read when |
 | ---: | --- | --- | --- | --- |
 | 0001 | 2026-09-03 | Accepted | [Add continuous integration for pull requests](references/0001-add-ci-for-pull-requests.md) | Changing CI triggers, required checks, test/build jobs, or release verification |
+| 0002 | 2026-09-04 | Accepted | [Keep platform UI and audio capture outside the package boundary](references/0002-keep-platform-code-outside-package-boundary.md) | Moving code between the app target and Swift package, or changing probe/test dependencies |
+| 0003 | 2026-09-04 | Accepted | [Normalize provider transcripts before output](references/0003-normalize-provider-transcripts-before-output.md) | Changing provider event mapping, transcript revisions, typing, or clipboard output |
+| 0004 | 2026-09-04 | Accepted | [Model dictation as manual push-to-talk with conservative output](references/0004-use-manual-push-to-talk-and-conservative-output.md) | Changing turn detection, commit timing, interim delivery, cancellation, or finalization |
 
 When a decision changes, add a new numbered record instead of rewriting its rationale. Mark the earlier entry `Superseded` and link both records.
