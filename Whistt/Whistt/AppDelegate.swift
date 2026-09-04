@@ -37,6 +37,9 @@ private let modelGroups: [ModelGroup] = [
     ModelGroup(title: "xAI — final only", provider: .xAI, streamsDeltas: false, models: [
         "xai-streaming-stt",
     ]),
+    ModelGroup(title: "Microsoft Azure Voice Live — final only (preview)", provider: .azure, streamsDeltas: false, models: [
+        "mai-transcribe-2",
+    ]),
 ]
 
 private let availableModels: [String] = modelGroups.flatMap(\.models)
@@ -392,7 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let apiKeysItem = NSMenuItem(title: "API Keys…", action: #selector(showAPIKeys(_:)), keyEquivalent: "")
+        let apiKeysItem = NSMenuItem(title: "Provider Settings…", action: #selector(showAPIKeys(_:)), keyEquivalent: "")
         apiKeysItem.target = self
         menu.addItem(apiKeysItem)
 
@@ -416,6 +419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func resolveAPIKey(for provider: TranscriptionProvider, promptIfMissing: Bool = true) -> String? {
+        if provider == .azure { return resolveAzureConfig(promptIfMissing: promptIfMissing) }
         let account = provider.apiKeyAccount
         // `make debug` opts into using the keys exported from the repository's
         // .env without reading or updating Keychain. A missing environment key
@@ -439,6 +443,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return legacy
         }
         return promptIfMissing ? promptForAPIKey(provider: provider, initial: nil) : nil
+    }
+
+    /// Azure needs both an API key and a Voice Live endpoint. Instead of the
+    /// key-only prompt, either piece missing opens the Provider Settings
+    /// window so the user can complete the configuration in one place.
+    private func resolveAzureConfig(promptIfMissing: Bool) -> String? {
+        let account = TranscriptionProvider.azure.apiKeyAccount
+        var apiKey: String?
+        if let environmentValue = ProcessInfo.processInfo.environment[account]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !environmentValue.isEmpty {
+            apiKey = environmentValue
+        } else if let stored = KeychainStore.value(for: account) {
+            apiKey = stored
+        } else if let legacy = EnvLoader.value(for: account) {
+            if KeychainStore.set(legacy, for: account) {
+                WhisttLog.event("migrated \(account) from .env to Keychain")
+                showMigrationNoticeIfNeeded()
+            }
+            apiKey = legacy
+        }
+
+        let endpointResolved = AzureVoiceLiveSettings.resolveEndpoint() != nil
+        if apiKey != nil && endpointResolved { return apiKey }
+        guard promptIfMissing else { return nil }
+        WhisttLog.event(
+            "azure configuration incomplete (key=\(apiKey != nil), endpoint=\(endpointResolved)); opening Provider Settings"
+        )
+        DispatchQueue.main.async { [weak self] in
+            self?.apiKeysWindowController.present()
+        }
+        return nil
     }
 
     private func showMigrationNoticeIfNeeded() {
@@ -465,6 +500,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .gemini: field.placeholderString = "Gemini API key"
         case .meta: field.placeholderString = "Meta Model API key"
         case .xAI: field.placeholderString = "xai-..."
+        case .azure: field.placeholderString = "Azure Speech API key"
         }
         if let initial = initial { field.stringValue = initial }
         alert.accessoryView = field

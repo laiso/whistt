@@ -38,6 +38,8 @@ public enum TranscriptionTransportFactory {
             return MetaTranscriptionTransport(apiKey: apiKey, model: model)
         case .xAI:
             return XaiTranscriptionTransport(apiKey: apiKey)
+        case .azure:
+            return AzureVoiceLiveTransport(apiKey: apiKey, model: model)
         }
     }
 }

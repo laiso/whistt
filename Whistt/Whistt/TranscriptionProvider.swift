@@ -3,6 +3,7 @@ public enum TranscriptionProvider: String {
     case gemini
     case meta
     case xAI
+    case azure
 
     public var apiKeyAccount: String {
         switch self {
@@ -10,6 +11,7 @@ public enum TranscriptionProvider: String {
         case .gemini: return "GEMINI_API_KEY"
         case .meta: return "META_API_KEY"
         case .xAI: return "XAI_API_KEY"
+        case .azure: return "AZURE_SPEECH_API_KEY"
         }
     }
 
@@ -19,6 +21,7 @@ public enum TranscriptionProvider: String {
         case .gemini: return "Gemini"
         case .meta: return "Meta"
         case .xAI: return "xAI"
+        case .azure: return "Azure"
         }
     }
 }
