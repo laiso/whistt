@@ -1,6 +1,6 @@
 # Whistt — Mac native real-time voice input
 
-Hold **⌥ Option + Space** to talk; speech is streamed to OpenAI Realtime, Google Gemini Live Transcription, Meta Muse Voice Transcribe, or xAI streaming Speech-to-Text and the resulting text is typed at the current cursor position.
+Hold **⌥ Option + Space** to talk; speech is streamed to OpenAI Realtime, Google Gemini Live Transcription, Meta Muse Voice Transcribe, xAI streaming Speech-to-Text, or Microsoft Azure Voice Live and the resulting text is typed at the current cursor position.
 
 ![demo](assets/demo.gif)
 
@@ -10,6 +10,19 @@ Menu Bar app. Native Swift / AVFoundation / URLSessionWebSocketTask — no third
 
 Most voice-input apps hide the transcription model behind their service. Whistt is an open-source client for trying newly released real-time transcription models in an actual macOS dictation workflow: choose the provider and model, bring your own API key, and compare results without an opaque intermediary.
 
+## Provider comparison
+
+| Provider | Model | Interim results | Required settings | Reference price/hour |
+|---|---|---|---|---:|
+| Microsoft (preview) | `mai-transcribe-2` | None (final only) | `AZURE_SPEECH_API_KEY` + Endpoint | **$0.10**※ |
+| Meta | `muse-voice-transcribe-1.0` | None (final only) | `META_API_KEY` | **$0.18** |
+| xAI | Streaming STT | Revising (typed via revisions) | `XAI_API_KEY` | **$0.20** |
+| OpenAI | `gpt-transcribe` | None (after-turn transcription) | `OPENAI_API_KEY` | **$0.27** |
+| Gemini | `gemini-3.5-transcribe-live` | Revising (not typed) | `GEMINI_API_KEY` | **approx. $0.54** |
+| OpenAI | `gpt-realtime-whisper` | Streaming deltas (typed live) | `OPENAI_API_KEY` | **$1.02** |
+
+Reference prices as of September 2026. ※ Limited-time introductory rate for `mai-transcribe-2`; Voice Live is a preview feature and whether this rate applies to the Voice Live route (including the hosted conversation model charge) must be confirmed on the actual Azure bill. OpenAI's `gpt-transcribe` is primarily after-turn transcription and is not yet selectable in Whistt's model menu.
+
 ## Requirements
 
 - macOS 26.2+ / Xcode 16+
@@ -18,12 +31,13 @@ Most voice-input apps hide the transcription model behind their service. Whistt 
   - Google Gemini API key with Live API access
   - Meta Model API key with Muse Voice Transcribe access — <https://dev.meta.ai/>
   - xAI API key with streaming Speech-to-Text access — <https://console.x.ai/>
+  - Azure Speech resource endpoint with Voice Live preview access (supplies `AZURE_SPEECH_API_KEY` and `AZURE_SPEECH_ENDPOINT`)
   - Gemini API key — <https://aistudio.google.com/app/apikey>
 
 ## Run
 
 1. Open `Whistt/Whistt.xcodeproj` and ⌘R.
-2. Paste the selected provider's API key when prompted. OpenAI, Gemini, Meta, and xAI keys are stored as separate entries in the macOS Keychain.
+2. Paste the selected provider's API key when prompted. OpenAI, Gemini, Meta, xAI, and Azure keys are stored as separate entries in the macOS Keychain.
 
    <img src="assets/api-key-dialog.png" alt="OpenAI API Key prompt" width="360">
 3. Grant **Microphone** + **Accessibility** permissions in System Settings, then relaunch.
@@ -31,9 +45,9 @@ Most voice-input apps hide the transcription model behind their service. Whistt 
    <img src="assets/accessibility.png" alt="Accessibility settings with Whistt enabled" width="360">
 4. Hold ⌥+Space, speak, release — text appears at your cursor.
 
-Switch between **Type at cursor** / **Clipboard** output and pick a transcription model from the menu bar. OpenAI uses the realtime-only `gpt-realtime-whisper`. Gemini uses `gemini-3.5-transcribe-live`, Japanese (`ja-JP`), and manual push-to-talk VAD. Its interim hypotheses are not typed because they can revise earlier text; only finalized text is inserted. xAI receives streaming revisions from `wss://api.x.ai/v1/stt`, but keeps them internal and inserts only the final transcript once recording finishes.
+Switch between **Type at cursor** / **Clipboard** output and pick a transcription model from the menu bar. OpenAI uses the realtime-only `gpt-realtime-whisper`. Gemini uses `gemini-3.5-transcribe-live`, Japanese (`ja-JP`), and manual push-to-talk VAD. Its interim hypotheses are not typed because they can revise earlier text; only finalized text is inserted. xAI receives streaming revisions from `wss://api.x.ai/v1/stt`, but keeps them internal and inserts only the final transcript once recording finishes. Azure Voice Live (preview) uses `mai-transcribe-2`, streams PCM16/24kHz to the hosted Voice Live WebSocket, and inserts only the final transcript; language is auto-detected.
 
-Open **API Keys…** from the menu to add, replace, or remove keys for OpenAI, Gemini, Meta, and xAI in one place. For local development, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `META_API_KEY`, and `XAI_API_KEY` can be supplied through process environment variables or `.env`; the selected provider's key is migrated to Keychain on first use.
+Open **Provider Settings…** from the menu to add, replace, or remove keys for OpenAI, Gemini, Meta, xAI, and Azure in one place. Azure additionally stores its Voice Live endpoint (e.g. `https://<resource>.services.ai.azure.com/`) in preferences; the API key stays in the Keychain. For local development, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `META_API_KEY`, `XAI_API_KEY`, `AZURE_SPEECH_API_KEY`, and `AZURE_SPEECH_ENDPOINT` can be supplied through process environment variables or `.env`; the selected provider's key is migrated to Keychain on first use and environment values take precedence over saved settings. If the Azure key or endpoint is missing, recording opens Provider Settings instead of the key-only prompt.
 
 <img src="assets/menu-bar.png" alt="Menu bar dropdown" width="500">
 
@@ -118,6 +132,16 @@ swift run xai-live-probe /path/to/audio.raw
 ```
 
 It reads `XAI_API_KEY` through `EnvLoader`, waits for `transcript.created`, streams PCM to `wss://api.x.ai/v1/stt`, and prints the transcript when `audio.done` finalization returns. Language is auto-detected.
+
+## Azure Voice Live probe
+
+The Azure probe accepts raw PCM16LE, 24 kHz, mono audio and drives the app's `AzureVoiceLiveTransport` end to end:
+
+```
+swift run azure-voice-live-probe /path/to/audio.raw
+```
+
+It reads `AZURE_SPEECH_API_KEY` and `AZURE_SPEECH_ENDPOINT` through `EnvLoader`, configures `mai-transcribe-2` in the Voice Live session, streams audio at real-time pace so server-side VAD sees a natural signal, and prints the final transcript. Run without arguments it only verifies session setup.
 
 ## More
 
