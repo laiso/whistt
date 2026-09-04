@@ -764,20 +764,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     ) -> String? {
         let apiKey = rawAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasStoredKey = KeychainStore.contains(account: provider.apiKeyAccount)
+        let normalizedAzureEndpoint: String?
 
         if apiKey.isEmpty && !hasStoredKey {
             return "Enter an API key."
-        }
-        if !apiKey.isEmpty && !KeychainStore.set(apiKey, for: provider.apiKeyAccount) {
-            return "Could not save the key to the macOS Keychain."
         }
 
         if provider == .azure {
             let endpoint = rawEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !endpoint.isEmpty else { return "Enter the Azure Voice Live endpoint." }
-            guard AzureVoiceLiveSettings.saveEndpoint(endpoint) else {
+            guard let normalized = AzureVoiceLiveSettings.normalizedEndpoint(endpoint) else {
                 return "Enter an https:// URL with a host name, such as https://<resource>.services.ai.azure.com/."
             }
+            normalizedAzureEndpoint = normalized
+        } else {
+            normalizedAzureEndpoint = nil
+        }
+
+        if !apiKey.isEmpty && !KeychainStore.set(apiKey, for: provider.apiKeyAccount) {
+            return "Could not save the key to the macOS Keychain."
+        }
+        if let normalizedAzureEndpoint {
+            AzureVoiceLiveSettings.saveEndpoint(normalizedAzureEndpoint)
         }
 
         reloadCurrentAPIKey()

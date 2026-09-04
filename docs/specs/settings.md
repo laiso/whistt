@@ -35,4 +35,12 @@ Feature: Native application settings
     When Whistt is quit and relaunched
     Then Clipboard remains selected
     And the recording-start sound remains disabled
+
+  Scenario: Approve launch at login in System Settings
+    Given launch at login requires approval
+    And the General settings pane remains open
+    When the user enables Whistt in System Settings
+    And returns to Whistt
+    Then the launch-at-login toggle reflects the current system status
+    And the approval warning is updated without reopening Settings
 ```

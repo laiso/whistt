@@ -143,6 +143,7 @@ private struct SettingsPaneView: View {
 private struct GeneralSettingsView: View {
     @ObservedObject var appDelegate: AppDelegate
     @State private var launchAtLogin = false
+    @State private var launchAtLoginRequiresApproval = false
     @State private var launchError: String?
 
     var body: some View {
@@ -177,7 +178,7 @@ private struct GeneralSettingsView: View {
                     set: updateLaunchAtLogin
                 ))
 
-                if appDelegate.launchAtLoginRequiresApproval {
+                if launchAtLoginRequiresApproval {
                     HStack {
                         Text("Approval is required in System Settings.")
                             .foregroundStyle(.secondary)
@@ -205,13 +206,21 @@ private struct GeneralSettingsView: View {
         .formStyle(.grouped)
         .padding(20)
         .onAppear {
-            launchAtLogin = appDelegate.launchAtLoginEnabled
+            refreshLaunchAtLoginStatus()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshLaunchAtLoginStatus()
         }
     }
 
     private func updateLaunchAtLogin(_ enabled: Bool) {
         launchError = appDelegate.setLaunchAtLogin(enabled)
+        refreshLaunchAtLoginStatus()
+    }
+
+    private func refreshLaunchAtLoginStatus() {
         launchAtLogin = appDelegate.launchAtLoginEnabled
+        launchAtLoginRequiresApproval = appDelegate.launchAtLoginRequiresApproval
     }
 }
 
