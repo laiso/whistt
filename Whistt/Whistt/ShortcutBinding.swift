@@ -5,7 +5,7 @@ import Foundation
 /// behavior); a `modifierOnly` binding triggers on holding a single modifier key
 /// for the hold threshold. The exact modifier key code is preserved so that
 /// left/right variants stay distinct when the event stream distinguishes them.
-public enum ShortcutBinding: Equatable {
+public enum ShortcutBinding: Hashable {
     case chord(keyCode: Int64, modifiers: UInt64)
     case modifierOnly(keyCode: Int64, modifier: UInt64)
 }

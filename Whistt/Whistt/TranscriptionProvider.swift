@@ -1,9 +1,11 @@
-public enum TranscriptionProvider: String {
+public enum TranscriptionProvider: String, CaseIterable, Identifiable {
     case openAI
     case gemini
     case meta
     case xAI
     case azure
+
+    public var id: String { rawValue }
 
     public var apiKeyAccount: String {
         switch self {

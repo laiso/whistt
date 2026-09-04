@@ -1,8 +1,26 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 public enum KeychainStore {
     public static let defaultService = "so.lai.whistt"
+
+    /// Checks for an item without asking Keychain to return its secret value.
+    /// Settings status rows call this during SwiftUI redraws, so authentication
+    /// UI must never be presented from this path.
+    public static func contains(account: String, service: String = defaultService) -> Bool {
+        let authenticationContext = LAContext()
+        authenticationContext.interactionNotAllowed = true
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: authenticationContext
+        ]
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        return status == errSecSuccess || status == errSecInteractionNotAllowed
+    }
 
     public static func value(for account: String, service: String = defaultService) -> String? {
         let query: [String: Any] = [
