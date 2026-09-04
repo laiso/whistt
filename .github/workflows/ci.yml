@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Test release scripts
-        run: make test-release-scripts
+        run: ./Tests/ReleaseScripts/run.sh
 
   test:
     name: Swift Package Tests
