@@ -246,6 +246,16 @@ final class ShortcutEngineTests: XCTestCase {
 
     // MARK: - Persistence
 
+    func testDefaultAndRecommendedShortcutsStayFocused() {
+        XCTAssertEqual(ShortcutBinding.defaultBinding,
+                       .modifierOnly(keyCode: 61, modifier: CGEventFlags.maskAlternate.rawValue))
+        XCTAssertEqual(ShortcutBinding.recommended.count, 3)
+        XCTAssertEqual(ShortcutBinding.recommended.map(\.displayName), [
+            "Right Option", "Right Control", "Right Command",
+        ])
+        XCTAssertTrue(ShortcutBinding.recommended.allSatisfy(\.isValid))
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suite = "ShortcutBindingStoreTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

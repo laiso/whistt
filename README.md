@@ -2,7 +2,7 @@
 
 Native push-to-talk voice input for macOS.
 
-Hold **⌥ Option + Space**, speak, and release. Whistt types the transcript at your cursor or copies it to the clipboard.
+Hold **Right Option**, speak, and release. Whistt types the transcript at your cursor or copies it to the clipboard.
 
 ![Whistt demo](assets/demo.gif)
 
@@ -42,7 +42,7 @@ On first launch, macOS may block the app. Open **System Settings → Privacy & S
 
    <img src="assets/accessibility.png" alt="Whistt in Accessibility settings" width="360">
 
-3. Hold **⌥ Option + Space**, speak, and release.
+3. Hold **Right Option**, speak, and release.
 
 Use the menu bar to select a provider and switch between typing at the cursor and copying to the clipboard.
 

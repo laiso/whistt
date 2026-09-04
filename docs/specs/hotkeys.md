@@ -2,6 +2,9 @@
 
 ## Requirements
 
+- On a fresh installation with no saved shortcut, Whistt shall use **Right Option** as the default push-to-talk shortcut.
+- Whistt shall show exactly three recommended shortcuts: **Right Option (Default)**, **Right Control**, and **Right Command**.
+- Whistt shall offer arbitrary supported key combinations through **Customize…** rather than listing additional presets.
 - When the user selects **Shortcut → Customize…**, Whistt shall present the shortcut recorder after status-menu tracking has finished.
 - While the shortcut recorder is active, Whistt shall receive and display the user's supported key combination.
 - When a valid shortcut is captured, Whistt shall enable **Save**.
@@ -40,8 +43,19 @@ Feature: Custom push-to-talk shortcuts
 
     When the user quits and relaunches Whistt
     Then the saved shortcut remains selected
+
+  Scenario: AT-HOTKEY-002 — Use the default shortcut on a fresh installation
+    Given Whistt has no saved shortcut
+    When Whistt launches
+    Then the current shortcut is Right Option
+
+    When the user holds Right Option
+    Then recording starts
+
+    When the user releases Right Option
+    Then recording stops
 ```
 
 ## Automation status
 
-`AT-HOTKEY-001` is manual. A future macOS UI test should launch the `LSUIElement` application, operate the status menu, synthesize the shortcut, and verify the recorder and persisted menu state end to end.
+Unit tests verify the default and three recommendations, binding validity and persistence, and the recording start/stop lifecycle. The complete `LSUIElement` menu and shortcut-recorder flows in `AT-HOTKEY-001` and `AT-HOTKEY-002` remain manual Gherkin scenarios until macOS UI automation can synthesize global shortcuts and verify the focused application end to end.

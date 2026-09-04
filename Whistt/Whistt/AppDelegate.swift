@@ -51,15 +51,6 @@ private func groupTitle(forModel name: String) -> String? {
 private let modelDefaultsKey = "WHISTT_MODEL"
 private let envMigrationNoticeKey = "WHISTT_ENV_MIGRATION_NOTICE_SHOWN"
 
-let shortcutPresets: [ShortcutBinding] = [
-    .chord(keyCode: 49, modifiers: CGEventFlags.maskAlternate.rawValue),
-    .chord(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue),
-    .chord(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskAlternate.rawValue),
-    .chord(keyCode: 50, modifiers: CGEventFlags.maskAlternate.rawValue),
-]
-
-private let defaultBinding = shortcutPresets[0]
-
 enum SettingsTab: String, Hashable {
     case general
     case shortcut
@@ -83,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published private(set) var outputMode: OutputMode = .typing
     private var apiKey: String?
     @Published private(set) var currentModel: String = ""
-    @Published private(set) var currentBinding: ShortcutBinding = defaultBinding
+    @Published private(set) var currentBinding: ShortcutBinding = .defaultBinding
     @Published private(set) var playsRecordingStartSound = true
     @Published var selectedSettingsTab: SettingsTab = .general
     @Published private(set) var providerConfigurationRevision = 0
@@ -127,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         if let stored = ShortcutBindingStore.load(defaults: .standard) {
             currentBinding = stored
         } else {
-            currentBinding = defaultBinding
+            currentBinding = .defaultBinding
             WhisttLog.event("no valid stored shortcut; falling back to default binding")
         }
         hotKey.updateBinding(currentBinding)
@@ -213,7 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     private func startAccessibilityWatchdog() {
-        // Until Accessibility is granted, CGEvent.tapCreate fails silently and ⌥+Space leaks
+        // Until Accessibility is granted, CGEvent.tapCreate fails silently and the shortcut leaks
         // through to the focused app. Poll until granted, then retry the tap — avoids the
         // "must relaunch after granting" footgun.
         guard !hotKey.isRunning else { return }
@@ -416,8 +407,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let shortcutTitle = currentBinding.displayName
         let shortcutHeader = NSMenuItem(title: "Shortcut: \(shortcutTitle)", action: nil, keyEquivalent: "")
         let shortcutSubmenu = NSMenu()
-        for (idx, preset) in shortcutPresets.enumerated() {
-            let it = NSMenuItem(title: preset.displayName, action: #selector(selectShortcut(_:)), keyEquivalent: "")
+        for (idx, preset) in ShortcutBinding.recommended.enumerated() {
+            let title = preset == .defaultBinding ? "\(preset.displayName) (Default)" : preset.displayName
+            let it = NSMenuItem(title: title, action: #selector(selectShortcut(_:)), keyEquivalent: "")
             it.target = self
             it.state = (preset == currentBinding) ? .on : .off
             it.tag = idx
@@ -557,8 +549,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     @objc private func selectShortcut(_ sender: NSMenuItem) {
         let idx = sender.tag
-        guard shortcutPresets.indices.contains(idx) else { return }
-        applyBinding(shortcutPresets[idx])
+        guard ShortcutBinding.recommended.indices.contains(idx) else { return }
+        applyBinding(ShortcutBinding.recommended[idx])
     }
 
     @objc private func customizeShortcut(_ sender: NSMenuItem) {
