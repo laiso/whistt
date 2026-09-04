@@ -46,6 +46,16 @@ extension ShortcutBinding: Codable {
 }
 
 extension ShortcutBinding {
+    /// The small set shown as first-class choices in the UI. Keep this list
+    /// focused; arbitrary bindings remain available through Customize.
+    public static let recommended: [ShortcutBinding] = [
+        .modifierOnly(keyCode: 61, modifier: CGEventFlags.maskAlternate.rawValue),
+        .modifierOnly(keyCode: 62, modifier: CGEventFlags.maskControl.rawValue),
+        .modifierOnly(keyCode: 54, modifier: CGEventFlags.maskCommand.rawValue),
+    ]
+
+    public static let defaultBinding = recommended[0]
+
     /// Supported modifier flags for any binding kind.
     public static let supportedModifierMask: UInt64 =
         CGEventFlags.maskControl.rawValue |

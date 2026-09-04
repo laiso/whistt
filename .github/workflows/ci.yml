@@ -11,6 +11,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-scripts:
+    name: Release Script Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Test release scripts
+        run: ./Tests/ReleaseScripts/run.sh
+
   test:
     name: Swift Package Tests
     runs-on: macos-latest

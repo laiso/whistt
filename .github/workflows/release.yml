@@ -60,22 +60,42 @@ jobs:
             exit 0
           fi
 
-          LATEST_TAG="${{ steps.gate.outputs.latest_tag }}"
-          VER=${LATEST_TAG#v}
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VER"
-
-          # PR merges produce commit messages like "Merge pull request #N from ..." (merge commit)
-          # or "Title (#N)" (squash). Either => minor bump. Direct pushes => patch bump.
           MSG=$(git log -1 --pretty=%B HEAD)
-          if printf '%s' "$MSG" | grep -qE '^Merge pull request #[0-9]+|\(#[0-9]+\)'; then
-            NEW="v$MAJOR.$((MINOR + 1)).0"
-            echo "bump=minor" >> "$GITHUB_OUTPUT"
-          else
-            NEW="v$MAJOR.$MINOR.$((PATCH + 1))"
-            echo "bump=patch" >> "$GITHUB_OUTPUT"
-          fi
+          NEW=$(.github/scripts/release-version.sh "${{ steps.gate.outputs.latest_tag }}" "$MSG")
           echo "tag=$NEW" >> "$GITHUB_OUTPUT"
-          echo "::notice::Bumping $LATEST_TAG -> $NEW"
+          echo "::notice::Bumping ${{ steps.gate.outputs.latest_tag }} -> $NEW"
+
+      - name: Generate release summary with Copilot
+        if: steps.gate.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+          PREVIOUS_TAG: ${{ steps.gate.outputs.latest_tag }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo "::notice::COPILOT_PAT is not configured; using commit-message release notes."
+            exit 0
+          fi
+
+          npm install --global @github/copilot
+          copilot -s --no-ask-user \
+            --allow-tool='shell(git log:*)' \
+            --allow-tool='shell(git diff:*)' \
+            -p "Create a concise, user-facing release summary in English for ${RELEASE_TAG}. Inspect the changes from ${PREVIOUS_TAG} to HEAD using only git log and git diff. If ${PREVIOUS_TAG} is v0.0.0, inspect all history instead. Focus on behavior users will notice, group changes under useful Markdown headings, and omit implementation trivia, commit hashes, contributor lists, installation instructions, and a top-level title. Return only the Markdown release summary. Do not modify any files." \
+            > .release-summary.md
+
+          test -s .release-summary.md
+
+      - name: Prepare release body
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          .github/scripts/generate-release-body.sh \
+            "${{ steps.gate.outputs.latest_tag }}" \
+            "Whistt-${{ steps.version.outputs.tag }}.zip" \
+            "$GITHUB_REPOSITORY" \
+            .release-summary.md \
+            .release-body.md
 
       - uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd # v1.6.0
         if: steps.gate.outputs.skip != 'true'
@@ -120,18 +140,4 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           files: ${{ steps.package.outputs.path }}
-          generate_release_notes: true
-          body: |
-            ## Install
-
-            > ⚠️ Whistt is distributed **unsigned**. Double-clicking the .app will show *"Apple could not verify Whistt is free of malware"*. Use one of the bypass steps below.
-
-            1. Download `${{ steps.package.outputs.name }}` and unzip.
-            2. Move `Whistt.app` to `/Applications/`.
-            3. Bypass Gatekeeper — pick one:
-               - **Terminal**: `xattr -dr com.apple.quarantine /Applications/Whistt.app`
-               - **GUI**: System Settings → Privacy & Security → scroll to the "Whistt was blocked" row → **Open Anyway**
-            4. Launch Whistt, paste your OpenAI API key (issue one at https://platform.openai.com/api-keys), and grant **Microphone** + **Accessibility** permissions in System Settings.
-            5. Hold ⌥+Space, speak, release — text appears at your cursor.
-
-            See the [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full usage.
+          body_path: .release-body.md

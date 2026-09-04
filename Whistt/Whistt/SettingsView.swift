@@ -278,14 +278,17 @@ private struct ShortcutSettingsView: View {
     }
 
     private var shortcutOptions: [ShortcutBinding] {
-        guard !shortcutPresets.contains(appDelegate.currentBinding) else {
-            return shortcutPresets
+        guard !ShortcutBinding.recommended.contains(appDelegate.currentBinding) else {
+            return ShortcutBinding.recommended
         }
-        return [appDelegate.currentBinding] + shortcutPresets
+        return [appDelegate.currentBinding] + ShortcutBinding.recommended
     }
 
     private func shortcutLabel(for binding: ShortcutBinding) -> String {
-        shortcutPresets.contains(binding)
+        if binding == .defaultBinding {
+            return "\(binding.displayName) (Default)"
+        }
+        return ShortcutBinding.recommended.contains(binding)
             ? binding.displayName
             : "Custom — \(binding.displayName)"
     }

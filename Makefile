@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 XCODE_DERIVED_DATA := .build/xcode
 WHISTT_BINARY := $(XCODE_DERIVED_DATA)/Build/Products/Debug/Whistt.app/Contents/MacOS/Whistt
 
-.PHONY: build debug test
+.PHONY: build debug test test-release-scripts
 
 build:
 	xcodebuild \
@@ -23,3 +23,6 @@ debug: build
 
 test:
 	swift test
+
+test-release-scripts:
+	./Tests/ReleaseScripts/run.sh
