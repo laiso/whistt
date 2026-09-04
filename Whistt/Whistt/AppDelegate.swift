@@ -1,11 +1,8 @@
 import AppKit
 import ApplicationServices
+import Combine
 import CoreGraphics
-
-enum OutputMode: String {
-    case typing
-    case clipboard
-}
+import ServiceManagement
 
 private enum StatusIcon: Equatable {
     case idle
@@ -17,14 +14,16 @@ private enum StatusIcon: Equatable {
 // Models known to work over the GA Realtime WS endpoint (validated via realtime-probe).
 // Grouped by transcription delivery: streaming sends per-word deltas live, final-only
 // returns the entire transcript at commit time.
-private struct ModelGroup {
+struct ModelGroup: Identifiable {
     let title: String
     let provider: TranscriptionProvider
     let streamsDeltas: Bool
     let models: [String]
+
+    var id: String { title }
 }
 
-private let modelGroups: [ModelGroup] = [
+let modelGroups: [ModelGroup] = [
     ModelGroup(title: "OpenAI — realtime", provider: .openAI, streamsDeltas: true, models: [
         "gpt-realtime-whisper",
     ]),
@@ -52,7 +51,7 @@ private func groupTitle(forModel name: String) -> String? {
 private let modelDefaultsKey = "WHISTT_MODEL"
 private let envMigrationNoticeKey = "WHISTT_ENV_MIGRATION_NOTICE_SHOWN"
 
-private let shortcutPresets: [ShortcutBinding] = [
+let shortcutPresets: [ShortcutBinding] = [
     .chord(keyCode: 49, modifiers: CGEventFlags.maskAlternate.rawValue),
     .chord(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue),
     .chord(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskAlternate.rawValue),
@@ -61,14 +60,43 @@ private let shortcutPresets: [ShortcutBinding] = [
 
 private let defaultBinding = shortcutPresets[0]
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+enum SettingsTab: String, Hashable {
+    case general
+    case shortcut
+    case providers
+}
+
+extension ProviderConfigurationStatus {
+    var title: String {
+        switch self {
+        case .configured: return "Configured"
+        case .notConfigured: return "Not configured"
+        case .endpointMissing: return "Endpoint missing"
+        }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var statusItem: NSStatusItem!
     private let hotKey = HotKeyManager()
     private var agent: WhisperNativeAgent?
-    private var outputMode: OutputMode = .typing
+    @Published private(set) var outputMode: OutputMode = .typing
     private var apiKey: String?
-    private var currentModel: String = ""
-    private var currentBinding: ShortcutBinding = defaultBinding
+    @Published private(set) var currentModel: String = ""
+    @Published private(set) var currentBinding: ShortcutBinding = defaultBinding
+    @Published private(set) var playsRecordingStartSound = true
+    @Published var selectedSettingsTab: SettingsTab = .general
+    @Published private(set) var providerConfigurationRevision = 0
+    private lazy var settingsWindowController = SettingsWindowController(appDelegate: self)
+    private lazy var providerConfiguration = ProviderConfigurationService(
+        containsKey: { KeychainStore.contains(account: $0) },
+        saveKey: { KeychainStore.set($0, for: $1) },
+        deleteKey: { KeychainStore.delete(for: $0) },
+        storedAzureEndpoint: { AzureVoiceLiveSettings.storedEndpoint() },
+        resolvedAzureEndpoint: { AzureVoiceLiveSettings.resolveEndpoint() },
+        saveAzureEndpoint: { AzureVoiceLiveSettings.saveEndpoint($0) },
+        removeAzureEndpoint: { AzureVoiceLiveSettings.removeEndpoint() }
+    )
     private var currentStatusIcon: StatusIcon = .idle
     private var transcriptionFailed = false
     private var lastPresentedTranscriptionError: String?
@@ -81,16 +109,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var modifierOnlyCapturePending = false
     private var bufferedModifierOnlyDeltas = ""
     private var bufferedModifierOnlyFinals: [String] = []
-    private lazy var apiKeysWindowController: APIKeysWindowController = {
-        let controller = APIKeysWindowController()
-        controller.onKeysChanged = { [weak self] in
-            self?.reloadCurrentAPIKey()
-        }
-        return controller
-    }()
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
+
+        outputMode = AppPreferences.outputMode()
+        playsRecordingStartSound = AppPreferences.playsRecordingStartSound()
 
         let savedModel = UserDefaults.standard.string(forKey: modelDefaultsKey)
         let envModel = EnvLoader.value(for: "WHISTT_MODEL")
@@ -126,7 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.bufferedModifierOnlyFinals.removeAll(keepingCapacity: true)
                 self.lastPresentedTranscriptionError = nil
                 self.setStatusIcon(.active)
-                SoundFeedback.playRecordingStarted()
+                if self.playsRecordingStartSound {
+                    SoundFeedback.playRecordingStarted()
+                }
                 agent.start()
             }
         }
@@ -173,6 +198,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         ensureAccessibility()
         startAccessibilityWatchdog()
+
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        if environment["WHISTT_FORCE_LIGHT_APPEARANCE"] == "1" {
+            NSApp.appearance = NSAppearance(named: .aqua)
+        }
+        if let settingsTab = SettingsTab(rawValue: environment["WHISTT_SHOW_SETTINGS"] ?? "") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.openSettings(settingsTab)
+            }
+        }
+        #endif
     }
 
     private func startAccessibilityWatchdog() {
@@ -395,9 +432,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let apiKeysItem = NSMenuItem(title: "Provider Settings…", action: #selector(showAPIKeys(_:)), keyEquivalent: "")
-        apiKeysItem.target = self
-        menu.addItem(apiKeysItem)
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         menu.addItem(.separator())
 
@@ -442,11 +479,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return legacy
         }
-        return promptIfMissing ? promptForAPIKey(provider: provider, initial: nil) : nil
+        if promptIfMissing {
+            DispatchQueue.main.async { [weak self] in
+                self?.openSettings(.providers)
+            }
+        }
+        return nil
     }
 
     /// Azure needs both an API key and a Voice Live endpoint. Instead of the
-    /// key-only prompt, either piece missing opens the Provider Settings
+    /// key-only prompt, either piece missing opens Settings → Providers
     /// window so the user can complete the configuration in one place.
     private func resolveAzureConfig(promptIfMissing: Bool) -> String? {
         let account = TranscriptionProvider.azure.apiKeyAccount
@@ -471,7 +513,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "azure configuration incomplete (key=\(apiKey != nil), endpoint=\(endpointResolved)); opening Provider Settings"
         )
         DispatchQueue.main.async { [weak self] in
-            self?.apiKeysWindowController.present()
+            self?.openSettings(.providers)
         }
         return nil
     }
@@ -487,49 +529,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func promptForAPIKey(provider: TranscriptionProvider, initial: String?) -> String? {
-        let alert = NSAlert()
-        let label = provider.displayName
-        alert.messageText = "\(label) API Key"
-        alert.informativeText = "Paste your \(label) API key. It will be stored in the macOS Keychain."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        switch provider {
-        case .openAI: field.placeholderString = "sk-..."
-        case .gemini: field.placeholderString = "Gemini API key"
-        case .meta: field.placeholderString = "Meta Model API key"
-        case .xAI: field.placeholderString = "xai-..."
-        case .azure: field.placeholderString = "Azure Speech API key"
-        }
-        if let initial = initial { field.stringValue = initial }
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        let response = alert.runModal()
-        guard response == .alertFirstButtonReturn else { return nil }
-        let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return nil }
-        if value == initial { return value }
-        if !KeychainStore.set(value, for: provider.apiKeyAccount) {
-            showAlert(title: "Failed to save API key",
-                      message: "Could not write to the macOS Keychain.")
-            return nil
-        }
-        return value
-    }
-
-    @objc private func showAPIKeys(_ sender: NSMenuItem) {
-        apiKeysWindowController.present()
+    @objc private func showSettings(_ sender: NSMenuItem) {
+        openSettings(.general)
     }
 
     private func reloadCurrentAPIKey() {
         apiKey = resolveAPIKey(for: currentProvider, promptIfMissing: false)
         rebuildAgent()
         rebuildMenu()
+        providerConfigurationRevision += 1
     }
 
     @objc private func selectModel(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String, name != currentModel else { return }
+        applyModel(name)
+    }
+
+    func applyModel(_ name: String) {
+        guard availableModels.contains(name), name != currentModel else { return }
         WhisttLog.event("switching model: \(currentModel) -> \(name)")
         currentModel = name
         UserDefaults.standard.set(name, forKey: modelDefaultsKey)
@@ -553,7 +570,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func applyBinding(_ newBinding: ShortcutBinding) {
+    func applyBinding(_ newBinding: ShortcutBinding) {
         guard newBinding != currentBinding else { return }
         WhisttLog.event("switching shortcut: \(currentBinding.displayName) -> \(newBinding.displayName)")
         currentBinding = newBinding
@@ -562,7 +579,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
-    private func presentShortcutRecorder() {
+    func presentShortcutRecorder() {
         // Stop the global tap so the existing shortcut doesn't fire during recording.
         hotKey.stop()
         defer { hotKey.start() }
@@ -679,18 +696,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func setOutputMode(_ mode: OutputMode) {
+        guard mode != outputMode else { return }
+        outputMode = mode
+        AppPreferences.setOutputMode(mode)
+        rebuildMenu()
+    }
+
+    func setPlaysRecordingStartSound(_ enabled: Bool) {
+        guard enabled != playsRecordingStartSound else { return }
+        playsRecordingStartSound = enabled
+        AppPreferences.setPlaysRecordingStartSound(enabled)
+    }
+
+    var launchAtLoginEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    var launchAtLoginRequiresApproval: Bool {
+        SMAppService.mainApp.status == .requiresApproval
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) -> String? {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            objectWillChange.send()
+            return nil
+        } catch {
+            objectWillChange.send()
+            return error.localizedDescription
+        }
+    }
+
+    func openLoginItemsSettings() {
+        SMAppService.openSystemSettingsLoginItems()
+    }
+
+    func openSettings(_ tab: SettingsTab) {
+        selectedSettingsTab = tab
+        // Let launch and status-menu tracking finish before activating the utility window.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.settingsWindowController.present()
+        }
+    }
+
+    func providerConfigurationStatus(for provider: TranscriptionProvider) -> ProviderConfigurationStatus {
+        providerConfiguration.status(for: provider)
+    }
+
+    func hasProviderConfiguration(for provider: TranscriptionProvider) -> Bool {
+        providerConfiguration.hasConfiguration(for: provider)
+    }
+
+    func storedAzureEndpoint() -> String {
+        AzureVoiceLiveSettings.storedEndpoint() ?? ""
+    }
+
+    func saveProviderConfiguration(
+        for provider: TranscriptionProvider,
+        apiKey rawAPIKey: String,
+        azureEndpoint rawEndpoint: String
+    ) -> String? {
+        switch providerConfiguration.save(
+            provider: provider,
+            rawAPIKey: rawAPIKey,
+            rawAzureEndpoint: rawEndpoint
+        ) {
+        case .success:
+            reloadCurrentAPIKey()
+            return nil
+        case .failure(let error):
+            return providerConfigurationMessage(for: error)
+        }
+    }
+
+    func removeProviderConfiguration(for provider: TranscriptionProvider) -> String? {
+        switch providerConfiguration.remove(provider: provider) {
+        case .success:
+            reloadCurrentAPIKey()
+            return nil
+        case .failure(let error):
+            return providerConfigurationMessage(for: error)
+        }
+    }
+
+    private func providerConfigurationMessage(for error: ProviderConfigurationError) -> String {
+        switch error {
+        case .apiKeyMissing: return "Enter an API key."
+        case .endpointMissing: return "Enter the Azure Voice Live endpoint."
+        case .endpointInvalid:
+            return "Enter an https:// URL with a host name, such as https://<resource>.services.ai.azure.com/."
+        case .keySaveFailed: return "Could not save the key to the macOS Keychain."
+        case .keyDeleteFailed: return "Could not remove the key from the macOS Keychain."
+        }
+    }
+
+    func suspendShortcutHandling() {
+        hotKey.stop()
+    }
+
+    func resumeShortcutHandling() {
+        hotKey.start()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         hotKey.shutdown()
     }
 
     @objc private func setTyping(_ sender: NSMenuItem) {
-        outputMode = .typing
-        rebuildMenu()
+        setOutputMode(.typing)
     }
 
     @objc private func setClipboard(_ sender: NSMenuItem) {
-        outputMode = .clipboard
-        rebuildMenu()
+        setOutputMode(.clipboard)
     }
 
     private func ensureAccessibility() {
@@ -711,7 +833,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func userFacingTranscriptionError(from technicalMessage: String) -> String {
         if technicalMessage.contains("Incorrect API key") {
-            return "The API key was rejected. Open API Keys… and save a valid key, then try again."
+            return "The API key was rejected. Open Settings → Providers and save a valid key, then try again."
         }
         if technicalMessage.contains("Meta"),
            technicalMessage.contains("Protocol error") {

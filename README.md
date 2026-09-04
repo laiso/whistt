@@ -36,9 +36,7 @@ On first launch, macOS may block the app. Open **System Settings → Privacy & S
 
 ## Set up and use
 
-1. Add credentials when prompted or from **Provider Settings…**. Azure also requires its Voice Live endpoint.
-
-   <img src="assets/api-key-dialog.png" alt="API key prompt" width="360">
+1. Open **Settings… → Providers** and add credentials for the provider you want to use. Azure also requires its Voice Live endpoint.
 
 2. Grant **Microphone** and **Accessibility** permissions in System Settings, then relaunch Whistt.
 
@@ -50,11 +48,13 @@ Use the menu bar to select a provider and switch between typing at the cursor an
 
 <img src="assets/menu-bar.png" alt="Whistt menu bar controls" width="500">
 
+Settings also controls the output mode, model, push-to-talk shortcut, launch-at-login behavior, and recording-start sound. For local development, provider credentials and the Azure endpoint can be supplied through process environment variables or `.env`; environment values take precedence over saved settings.
+
 ## Troubleshooting
 
 - **No text appears** — grant Accessibility permission to Whistt.
 - **The shortcut appears in the focused app** — check Accessibility permission. Whistt recovers automatically after permission is granted.
-- **Provider Settings opens when recording** — add the selected provider's missing credentials. Azure requires both an API key and endpoint.
+- **Settings opens when recording** — add the selected provider's missing credentials in **Settings → Providers**. Azure requires both an API key and endpoint.
 - **Gemini returns no text** — confirm the Gemini key has Live API access.
 
 ## Develop

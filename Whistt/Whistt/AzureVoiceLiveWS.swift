@@ -37,7 +37,7 @@ public final class AzureVoiceLiveTransport: NSObject, TranscriptionTransport, UR
     private func _connect() {
         let endpoint = endpointOverride ?? AzureVoiceLiveSettings.resolveEndpoint()
         guard let endpoint else {
-            onError?("Azure: no endpoint configured (set it in Provider Settings…)")
+            onError?("Azure: no endpoint configured (set it in Settings → Providers)")
             return
         }
         guard let url = AzureVoiceLiveFormat.streamURL(endpoint: endpoint) else {

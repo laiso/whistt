@@ -21,7 +21,7 @@ let package = Package(
             path: "Whistt/Whistt",
             exclude: [
                 "Assets.xcassets",
-                "APIKeysWindowController.swift",
+                "SettingsView.swift",
                 "WhisttApp.swift",
                 "AppDelegate.swift",
                 "HotKeyManager.swift",
@@ -31,8 +31,10 @@ let package = Package(
                 "SoundFeedback.swift"
             ],
             sources: [
+                "AppPreferences.swift",
                 "EnvLoader.swift",
                 "KeychainStore.swift",
+                "ProviderConfigurationService.swift",
                 "TranscriptionProvider.swift",
                 "TranscriptionTransport.swift",
                 "AudioStreamSender.swift",

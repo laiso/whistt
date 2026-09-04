@@ -6,7 +6,8 @@ struct WhisttApp: App {
 
     var body: some Scene {
         Settings {
-            EmptyView()
+            SettingsView(appDelegate: appDelegate)
         }
+        .windowResizability(.contentSize)
     }
 }
