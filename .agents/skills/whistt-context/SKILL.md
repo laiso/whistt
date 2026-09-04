@@ -23,12 +23,13 @@ When these disagree, update the applicable specification with the implementation
 - App/package dependency boundary: read decision 0002.
 - Provider result normalization or cursor output: read decision 0003.
 - Push-to-talk lifecycle or interim transcript delivery: read decision 0004.
+- Credential or non-secret provider setting storage: read decision 0005.
 
 ## Cross-cutting constraints
 
 - Keep application UI, microphone capture, and other AppKit/AVFoundation runtime behavior out of the Swift package boundary used by tests and probe CLIs.
 - Provider transports own connection lifecycle, wire formats, and conversion into provider-neutral transcript revisions. Output layers must not interpret provider protocol events.
 - Treat provider interim text as revisable unless the transport proves that a suffix is append-safe. Text already inserted into another application cannot always be rolled back safely.
-- The app stores provider credentials in Keychain. Probe CLIs use environment or `.env` values because unsigned command-line tools do not share the app's Keychain access.
+- The app stores provider secrets in Keychain and non-secret provider settings in preferences. Probe CLIs use environment or `.env` values because unsigned command-line tools do not share the app's Keychain access.
 
 Run `swift test` for package changes and `make build` when app-target code or shared source membership may be affected.

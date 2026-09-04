@@ -17,5 +17,6 @@ Read only the reference whose area overlaps the task. Do not load every decision
 | 0002 | 2026-09-04 | Accepted | [Keep platform UI and audio capture outside the package boundary](references/0002-keep-platform-code-outside-package-boundary.md) | Moving code between the app target and Swift package, or changing probe/test dependencies |
 | 0003 | 2026-09-04 | Accepted | [Normalize provider transcripts before output](references/0003-normalize-provider-transcripts-before-output.md) | Changing provider event mapping, transcript revisions, typing, or clipboard output |
 | 0004 | 2026-09-04 | Accepted | [Model dictation as manual push-to-talk with conservative output](references/0004-use-manual-push-to-talk-and-conservative-output.md) | Changing turn detection, commit timing, interim delivery, cancellation, or finalization |
+| 0005 | 2026-09-04 | Accepted | [Separate provider secrets from non-secret settings](references/0005-separate-provider-secrets-from-settings.md) | Changing credential storage, provider settings, environment overrides, or CLI authentication |
 
 When a decision changes, add a new numbered record instead of rewriting its rationale. Mark the earlier entry `Superseded` and link both records.

@@ -1,20 +1,22 @@
 import AppKit
 
 final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
-    private let providers: [TranscriptionProvider] = [.openAI, .gemini, .meta, .xAI]
+    private let providers: [TranscriptionProvider] = [.openAI, .gemini, .meta, .xAI, .azure]
     private var fields: [TranscriptionProvider: NSSecureTextField] = [:]
+    private var endpointField: NSTextField?
     private var statusLabels: [TranscriptionProvider: NSTextField] = [:]
     private var removeButtons: [TranscriptionProvider: NSButton] = [:]
+    private var saveButtons: [TranscriptionProvider: NSButton] = [:]
     var onKeysChanged: (() -> Void)?
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 330),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 430),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = "API Keys"
+        window.title = "Provider Settings"
         window.isReleasedWhenClosed = false
         window.center()
         self.init(window: window)
@@ -33,10 +35,10 @@ final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
     private func buildContent() {
         guard let window else { return }
 
-        let title = NSTextField(labelWithString: "API Keys")
+        let title = NSTextField(labelWithString: "Provider Settings")
         title.font = .systemFont(ofSize: 20, weight: .semibold)
 
-        let detail = NSTextField(wrappingLabelWithString: "Keys are stored securely in the macOS Keychain. Enter a new value to add or replace a key.")
+        let detail = NSTextField(wrappingLabelWithString: "API keys are stored securely in the macOS Keychain. Azure's endpoint is stored in preferences. Enter a new value to add or replace a setting.")
         detail.textColor = .secondaryLabelColor
 
         let rows = NSStackView()
@@ -87,6 +89,7 @@ final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
 
         let save = NSButton(title: "Save", target: self, action: #selector(saveKey(_:)))
         save.tag = providerTag(provider)
+        saveButtons[provider] = save
 
         let remove = NSButton(title: "Remove", target: self, action: #selector(removeKey(_:)))
         remove.tag = providerTag(provider)
@@ -97,7 +100,18 @@ final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
         status.font = .systemFont(ofSize: 11)
         statusLabels[provider] = status
 
-        let controls = NSStackView(views: [field, save, remove])
+        let controls: NSStackView
+        if provider == .azure {
+            // Azure additionally needs its Voice Live endpoint, which is not a
+            // secret and is stored in UserDefaults alongside the Keychain key.
+            let endpoint = NSTextField()
+            endpoint.placeholderString = "https://<resource>.services.ai.azure.com/"
+            endpoint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            endpointField = endpoint
+            controls = NSStackView(views: [field, endpoint, save, remove])
+        } else {
+            controls = NSStackView(views: [field, save, remove])
+        }
         controls.orientation = .horizontal
         controls.spacing = 8
 
@@ -110,24 +124,51 @@ final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
         row.orientation = .horizontal
         row.alignment = .top
         row.spacing = 12
-        row.widthAnchor.constraint(equalToConstant: 472).isActive = true
-        right.widthAnchor.constraint(equalToConstant: 396).isActive = true
+        row.widthAnchor.constraint(equalToConstant: 512).isActive = true
+        right.widthAnchor.constraint(equalToConstant: 436).isActive = true
         controls.widthAnchor.constraint(equalTo: right.widthAnchor).isActive = true
         return row
     }
 
+    private func azureConfigured() -> (keySet: Bool, endpointSet: Bool) {
+        let keySet = KeychainStore.value(for: TranscriptionProvider.azure.apiKeyAccount) != nil
+        let endpointSet = AzureVoiceLiveSettings.resolveEndpoint() != nil
+        return (keySet, endpointSet)
+    }
+
     private func refresh() {
         for provider in providers {
-            let isSet = KeychainStore.value(for: provider.apiKeyAccount) != nil
-            statusLabels[provider]?.stringValue = isSet ? "Saved in Keychain" : "Not set"
-            statusLabels[provider]?.textColor = isSet ? .systemGreen : .secondaryLabelColor
-            removeButtons[provider]?.isEnabled = isSet
+            if provider == .azure {
+                let (keySet, endpointSet) = azureConfigured()
+                let (text, color): (String, NSColor)
+                switch (keySet, endpointSet) {
+                case (true, true):
+                    (text, color) = ("Configured", .systemGreen)
+                case (true, false):
+                    (text, color) = ("Endpoint missing", .systemOrange)
+                default:
+                    (text, color) = ("API key missing", .secondaryLabelColor)
+                }
+                statusLabels[provider]?.stringValue = text
+                statusLabels[provider]?.textColor = color
+                removeButtons[provider]?.isEnabled = keySet || endpointSet
+            } else {
+                let isSet = KeychainStore.value(for: provider.apiKeyAccount) != nil
+                statusLabels[provider]?.stringValue = isSet ? "Saved in Keychain" : "Not set"
+                statusLabels[provider]?.textColor = isSet ? .systemGreen : .secondaryLabelColor
+                removeButtons[provider]?.isEnabled = isSet
+            }
             fields[provider]?.stringValue = ""
         }
+        endpointField?.stringValue = ""
     }
 
     @objc private func saveKey(_ sender: NSButton) {
         guard let provider = provider(forTag: sender.tag), let field = fields[provider] else { return }
+        if provider == .azure {
+            saveAzure(field: field)
+            return
+        }
         let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else {
             NSSound.beep()
@@ -142,11 +183,42 @@ final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
         onKeysChanged?()
     }
 
+    private func saveAzure(field: NSSecureTextField) {
+        guard let endpoint = endpointField else { return }
+        let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpointValue = endpoint.stringValue
+
+        // Blank fields mean "keep the stored value", so validate only what
+        // the user typed.
+        if !endpointValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard AzureVoiceLiveSettings.saveEndpoint(endpointValue) else {
+                showError("The endpoint must be an https:// URL with a host name, e.g. https://<resource>.services.ai.azure.com/")
+                window?.makeFirstResponder(endpoint)
+                return
+            }
+        }
+        if !key.isEmpty {
+            guard KeychainStore.set(key, for: TranscriptionProvider.azure.apiKeyAccount) else {
+                showError("Could not save the key to the macOS Keychain.")
+                return
+            }
+        }
+        if key.isEmpty && endpointValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            NSSound.beep()
+            window?.makeFirstResponder(field)
+            return
+        }
+        refresh()
+        onKeysChanged?()
+    }
+
     @objc private func removeKey(_ sender: NSButton) {
         guard let provider = provider(forTag: sender.tag) else { return }
         let alert = NSAlert()
-        alert.messageText = "Remove (provider.displayName) API key?"
-        alert.informativeText = "The key will be removed from the macOS Keychain."
+        alert.messageText = "Remove \(provider.displayName) settings?"
+        alert.informativeText = provider == .azure
+            ? "The key will be removed from the macOS Keychain and the endpoint from preferences."
+            : "The key will be removed from the macOS Keychain."
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
@@ -154,6 +226,9 @@ final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
         guard KeychainStore.delete(for: provider.apiKeyAccount) else {
             showError("Could not remove the key from the macOS Keychain.")
             return
+        }
+        if provider == .azure {
+            AzureVoiceLiveSettings.removeEndpoint()
         }
         refresh()
         onKeysChanged?()
@@ -165,7 +240,7 @@ final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
 
     private func showError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "Keychain Error"
+        alert.messageText = "Provider Settings"
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.runModal()
@@ -177,6 +252,7 @@ final class APIKeysWindowController: NSWindowController, NSWindowDelegate {
         case .gemini: return "Gemini API key"
         case .meta: return "Meta API key"
         case .xAI: return "xai-…"
+        case .azure: return "Azure Speech API key"
         }
     }
 
