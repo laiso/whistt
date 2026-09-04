@@ -16,7 +16,7 @@ Most voice-input apps hide the transcription model behind their service. Whistt 
 |---|---|---|---|---:|
 | Microsoft (preview) | `mai-transcribe-2` | None (final only) | `AZURE_SPEECH_API_KEY` + Endpoint | **$0.10**※ |
 | Meta | `muse-voice-transcribe-1.0` | None (final only) | `META_API_KEY` | **$0.18** |
-| xAI | Streaming STT | Revising (typed via revisions) | `XAI_API_KEY` | **$0.20** |
+| xAI | Streaming STT | Revising internally (final only) | `XAI_API_KEY` | **$0.20** |
 | OpenAI | `gpt-transcribe` | None (after-turn transcription) | `OPENAI_API_KEY` | **$0.27** |
 | Gemini | `gemini-3.5-transcribe-live` | Revising (not typed) | `GEMINI_API_KEY` | **approx. $0.54** |
 | OpenAI | `gpt-realtime-whisper` | Streaming deltas (typed live) | `OPENAI_API_KEY` | **$1.02** |
@@ -141,7 +141,7 @@ The Azure probe accepts raw PCM16LE, 24 kHz, mono audio and drives the app's `Az
 swift run azure-voice-live-probe /path/to/audio.raw
 ```
 
-It reads `AZURE_SPEECH_API_KEY` and `AZURE_SPEECH_ENDPOINT` through `EnvLoader`, configures `mai-transcribe-2` in the Voice Live session, streams audio at real-time pace so server-side VAD sees a natural signal, and prints the final transcript. Run without arguments it only verifies session setup.
+It reads `AZURE_SPEECH_API_KEY` and `AZURE_SPEECH_ENDPOINT` through `EnvLoader`, configures `mai-transcribe-2` in the Voice Live session with automatic turn detection disabled, streams audio at real-time pace, and prints the final transcript. Run without arguments it only verifies session setup.
 
 ## More
 

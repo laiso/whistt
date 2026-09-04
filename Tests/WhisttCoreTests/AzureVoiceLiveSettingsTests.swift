@@ -53,6 +53,19 @@ final class AzureVoiceLiveSettingsTests: XCTestCase {
         )
     }
 
+    func testDotEnvTakesPrecedenceOverStoredEndpoint() {
+        let defaults = makeDefaults()
+        AzureVoiceLiveSettings.saveEndpoint("https://stored.services.ai.azure.com", defaults: defaults)
+        XCTAssertEqual(
+            AzureVoiceLiveSettings.resolveEndpoint(
+                environment: [:],
+                defaults: defaults,
+                dotenvValue: "https://dotenv.services.ai.azure.com"
+            ),
+            "https://dotenv.services.ai.azure.com"
+        )
+    }
+
     func testResolveFallsBackToStoredThenNil() {
         let defaults = makeDefaults()
         XCTAssertNil(AzureVoiceLiveSettings.resolveEndpoint(environment: [:], defaults: defaults))

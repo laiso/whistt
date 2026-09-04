@@ -2,7 +2,7 @@ import XCTest
 @testable import WhisttCore
 
 final class AzureVoiceLiveProtocolTests: XCTestCase {
-    func testSessionUpdateContainsTranscriptionModelAndVAD() throws {
+    func testSessionUpdateContainsTranscriptionModelAndDisablesAutomaticVAD() throws {
         let message = try AzureVoiceLiveMessage.sessionUpdate(model: "mai-transcribe-2")
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any]
@@ -13,9 +13,7 @@ final class AzureVoiceLiveProtocolTests: XCTestCase {
             session["input_audio_transcription"] as? [String: Any]
         )
         XCTAssertEqual(transcription["model"] as? String, "mai-transcribe-2")
-        let vad = try XCTUnwrap(session["turn_detection"] as? [String: Any])
-        XCTAssertEqual(vad["type"] as? String, "azure_semantic_vad_multilingual")
-        XCTAssertEqual(vad["create_response"] as? Bool, false)
+        XCTAssertTrue(session["turn_detection"] is NSNull)
     }
 
     func testAudioAppendBase64EncodesPayload() throws {

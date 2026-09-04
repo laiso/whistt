@@ -38,15 +38,30 @@ public enum AzureVoiceLiveSettings {
         defaults.removeObject(forKey: endpointDefaultsKey)
     }
 
-    /// Environment (including `.env` exports) wins over the stored value.
+    /// Production resolution order: process environment, `.env`, preferences.
+    public static func resolveEndpoint() -> String? {
+        resolveEndpoint(
+            environment: ProcessInfo.processInfo.environment,
+            defaults: .standard,
+            dotenvValue: EnvLoader.value(for: "AZURE_SPEECH_ENDPOINT")
+        )
+    }
+
+    /// Injectable resolution used by tests. Process environment wins over a
+    /// value loaded from `.env`, which in turn wins over preferences.
     public static func resolveEndpoint(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        defaults: UserDefaults = .standard
+        environment: [String: String],
+        defaults: UserDefaults,
+        dotenvValue: String? = nil
     ) -> String? {
         if let fromEnv = environment["AZURE_SPEECH_ENDPOINT"]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !fromEnv.isEmpty {
             return fromEnv
+        }
+        if let fromFile = dotenvValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fromFile.isEmpty {
+            return fromFile
         }
         return storedEndpoint(defaults: defaults)
     }

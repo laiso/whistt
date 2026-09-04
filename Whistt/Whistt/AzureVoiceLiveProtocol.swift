@@ -18,12 +18,9 @@ public enum AzureVoiceLiveMessage {
                 "input_audio_transcription": [
                     "model": model
                 ],
-                "turn_detection": [
-                    // Server-side VAD ends the turn automatically so a manual
-                    // commit is only needed when the hotkey is released mid-speech.
-                    "type": "azure_semantic_vad_multilingual",
-                    "create_response": false
-                ]
+                // Whistt owns the turn boundary: one hotkey press must produce
+                // one committed transcript, even when speech contains pauses.
+                "turn_detection": NSNull()
             ]
         ]
         let data = try JSONSerialization.data(withJSONObject: update)
