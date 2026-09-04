@@ -18,7 +18,6 @@ When these disagree, update the applicable specification with the implementation
 ## Read by change area
 
 - Shortcut behavior: read `docs/specs/hotkeys.md`.
-- ChatGPT subscription authentication: read `docs/specs/chatgpt-subscription-integration.md`.
 - CI triggers, required checks, or release verification: read decision 0001.
 - App/package dependency boundary: read decision 0002.
 - Provider result normalization or cursor output: read decision 0003.
