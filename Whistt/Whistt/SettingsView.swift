@@ -481,17 +481,10 @@ private struct ProviderConfigurationSheet: View {
         }
         isCheckingOpenAIModels = true
         openAIModelAccess = []
-        do {
-            try await Task.sleep(for: .milliseconds(600))
-        } catch {
+        let models = TranscriptionModelCatalog.models(for: .openAI)
+        guard let results = await OpenAIModelAccessValidator.validate(rawAPIKey: key, models: models) else {
             return
         }
-        guard !Task.isCancelled else { return }
-        let models = modelGroups
-            .filter { $0.provider == .openAI }
-            .flatMap(\.models)
-        let results = await OpenAIModelAccessChecker.check(apiKey: key, models: models)
-        guard !Task.isCancelled else { return }
         openAIModelAccess = results
         isCheckingOpenAIModels = false
     }

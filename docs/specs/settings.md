@@ -15,6 +15,8 @@
 
 - `AppPreferencesTests` verifies output-mode and recording-start-sound defaults and persistence.
 - `ProviderConfigurationServiceTests` verifies API-key preservation, Azure endpoint validation and normalization, mutation ordering, configuration status, failure behavior, and removal.
+- `OpenAIModelAccessCheckerTests` verifies request construction, successful access, API and transport failures, concurrent result ordering, and empty input without using the live API.
+- `OpenAIModelAccessValidatorTests` verifies key normalization, debounce ordering, blank input, and cancellation of stale checks.
 - `ShortcutEngineTests` verifies shortcut persistence and the recording lifecycle independently of the macOS UI.
 
 Run `swift test` for this coverage. The scenarios below are limited to behavior that crosses the real macOS UI or system services and is not covered by the package tests.

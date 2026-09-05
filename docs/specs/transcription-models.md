@@ -24,3 +24,9 @@ This specification defines the transcription models exposed by Whistt.
 - Whistt shall not expose `gpt-realtime-whisper`.
 - Model selection controls shall present a flat list whose rows show vendor, model name, and reference price in US dollars per audio hour. Delivery semantics shall not be used as section headings. Prices are informational and shall not be treated as billing guarantees.
 - Adding or replacing a model requires confirmation that its production API accepts Whistt's audio format and push-to-talk lifecycle.
+
+## Automated coverage
+
+- `TranscriptionModelCatalogTests` verifies the supported model order, default and stale-value fallback, provider grouping, reference-price coverage, and display labels.
+- `FinalTranscriptOutputGateTests` verifies that interim events remain internal, completed transcripts are emitted once, and a new capture resets duplicate suppression.
+- `RealtimeProtocolTests` verifies that the selected model is encoded into the OpenAI transcription session and that delta and final event variants decode correctly.

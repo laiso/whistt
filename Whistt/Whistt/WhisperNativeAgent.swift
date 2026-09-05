@@ -12,7 +12,7 @@ final class WhisperNativeAgent: NSObject {
     private var isRunning = false
     private let bytesLock = NSLock()
     private var _bytesSent = 0
-    private var lastDeliveredTranscript: String?
+    private var outputGate = FinalTranscriptOutputGate()
     private var sessionStartedAt: TimeInterval?
     private var connectStartedAt: TimeInterval?
     private var inputEndedAt: TimeInterval?
@@ -46,7 +46,7 @@ final class WhisperNativeAgent: NSObject {
         sessionGeneration += 1
         let generation = sessionGeneration
         resetBytes()
-        lastDeliveredTranscript = nil
+        outputGate.reset()
         sessionStartedAt = ProcessInfo.processInfo.systemUptime
         connectStartedAt = nil
         inputEndedAt = nil
@@ -154,7 +154,9 @@ final class WhisperNativeAgent: NSObject {
                     + "afterInputEndMs=\(elapsedMilliseconds(since: inputEndedAt)) chars=\(text.count)"
             )
             WhisttLog.final(text)
-            deliverComplete(text)
+            if let completed = outputGate.consume(event) {
+                onTranscriptComplete?(completed)
+            }
         case .turnComplete:
             WhisttLog.event("turn complete")
         case .unknown(let type):
@@ -176,12 +178,6 @@ final class WhisperNativeAgent: NSObject {
     private func elapsedMilliseconds(since start: TimeInterval?) -> Int {
         guard let start else { return -1 }
         return max(0, Int(((ProcessInfo.processInfo.systemUptime - start) * 1_000).rounded()))
-    }
-
-    private func deliverComplete(_ transcript: String) {
-        guard transcript != lastDeliveredTranscript else { return }
-        lastDeliveredTranscript = transcript
-        onTranscriptComplete?(transcript)
     }
 
     private func startAudio() {

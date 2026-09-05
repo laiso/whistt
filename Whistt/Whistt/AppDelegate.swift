@@ -11,50 +11,14 @@ private enum StatusIcon: Equatable {
     case warning
 }
 
-// Models known to work with Whistt's push-to-talk lifecycle.
-struct ModelGroup: Identifiable {
-    let vendor: String
-    let provider: TranscriptionProvider
-    let models: [String]
-
-    var id: String { "\(vendor):\(models.joined(separator: ","))" }
-}
-
-let modelGroups: [ModelGroup] = [
-    ModelGroup(vendor: "OpenAI", provider: .openAI, models: [
-        "gpt-transcribe",
-        "gpt-live-transcribe",
-    ]),
-    ModelGroup(vendor: "Google", provider: .gemini, models: [
-        "gemini-3.5-transcribe-live",
-    ]),
-    ModelGroup(vendor: "Meta", provider: .meta, models: [
-        "muse-voice-transcribe-1.0",
-    ]),
-    ModelGroup(vendor: "xAI", provider: .xAI, models: [
-        "xai-streaming-stt",
-    ]),
-    ModelGroup(vendor: "Microsoft", provider: .azure, models: [
-        "mai-transcribe-2",
-    ]),
-]
-
-let modelReferencePricePerHour: [String: String] = [
-    "mai-transcribe-2": "$0.10*",
-    "muse-voice-transcribe-1.0": "$0.18",
-    "xai-streaming-stt": "$0.20",
-    "gpt-transcribe": "$0.27",
-    "gemini-3.5-transcribe-live": "~$0.54",
-    "gpt-live-transcribe": "$1.02",
-]
+let modelGroups = TranscriptionModelCatalog.groups
 
 func modelDisplayName(_ name: String, vendor: String) -> String {
-    guard let price = modelReferencePricePerHour[name] else { return "\(vendor) · \(name)" }
-    return "\(vendor) · \(name) · \(price)/hour"
+    TranscriptionModelCatalog.displayName(for: name, vendor: vendor)
 }
 
-private let availableModels: [String] = modelGroups.flatMap(\.models)
-private let defaultModel = availableModels[0]
+private let availableModels = TranscriptionModelCatalog.models
+private let defaultModel = TranscriptionModelCatalog.defaultModel
 
 private func vendorName(forModel name: String) -> String? {
     modelGroups.first { $0.models.contains(name) }?.vendor
@@ -120,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let savedModel = UserDefaults.standard.string(forKey: modelDefaultsKey)
         let envModel = EnvLoader.value(for: "WHISTT_MODEL")
         let preferredModel = savedModel ?? envModel
-        currentModel = preferredModel.flatMap { availableModels.contains($0) ? $0 : nil } ?? defaultModel
+        currentModel = TranscriptionModelCatalog.resolve(preferred: preferredModel)
         if savedModel != nil, savedModel != currentModel {
             UserDefaults.standard.set(currentModel, forKey: modelDefaultsKey)
         }
