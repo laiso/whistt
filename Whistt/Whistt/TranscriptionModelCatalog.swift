@@ -26,6 +26,9 @@ public enum TranscriptionModelCatalog {
         TranscriptionModelGroup(vendor: "Microsoft", provider: .azure, models: [
             "mai-transcribe-2",
         ]),
+        TranscriptionModelGroup(vendor: "ElevenLabs", provider: .elevenLabs, models: [
+            "scribe_v2_realtime",
+        ]),
     ]
 
     public static let referencePricePerHour: [String: String] = [
@@ -35,6 +38,7 @@ public enum TranscriptionModelCatalog {
         "gpt-transcribe": "$0.27",
         "gemini-3.5-transcribe-live": "~$0.54",
         "gpt-live-transcribe": "$1.02",
+        "scribe_v2_realtime": "$0.39",
     ]
 
     public static var models: [String] { groups.flatMap(\.models) }

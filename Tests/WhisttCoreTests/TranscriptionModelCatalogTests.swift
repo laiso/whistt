@@ -10,6 +10,7 @@ final class TranscriptionModelCatalogTests: XCTestCase {
             "muse-voice-transcribe-1.0",
             "xai-streaming-stt",
             "mai-transcribe-2",
+            "scribe_v2_realtime",
         ])
         XCTAssertFalse(TranscriptionModelCatalog.models.contains("gpt-realtime-whisper"))
     }
