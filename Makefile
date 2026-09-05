@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 XCODE_DERIVED_DATA := .build/xcode
 WHISTT_BINARY := $(XCODE_DERIVED_DATA)/Build/Products/Debug/Whistt.app/Contents/MacOS/Whistt
 
-.PHONY: build debug test test-release-scripts
+.PHONY: build debug test test-e2e-openai test-release-scripts
 
 build:
 	xcodebuild \
@@ -23,6 +23,10 @@ debug: build
 
 test:
 	swift test
+
+test-e2e-openai:
+	@test -n "$${WHISTT_E2E_AUDIO_FILE:-}" || { echo "WHISTT_E2E_AUDIO_FILE is required" >&2; exit 2; }
+	./Tests/E2E/run-openai-transcription.sh "$${WHISTT_E2E_AUDIO_FILE}"
 
 test-release-scripts:
 	./Tests/ReleaseScripts/run.sh

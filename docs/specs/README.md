@@ -6,5 +6,6 @@ Specifications define current behavior, external contracts, and observable accep
 | --- | --- | --- |
 | Global shortcuts | [Hotkeys](hotkeys.md) | EARS requirements and Gherkin scenarios |
 | Application settings | [Settings](settings.md) | Requirements and Gherkin scenarios |
+| Transcription models | [Transcription models](transcription-models.md) | Requirements, automated coverage, and Gherkin scenarios |
 
 Add a specification only when code and tests alone do not communicate the contract clearly. Historical decisions are supporting context, not current requirements.

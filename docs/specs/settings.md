@@ -39,6 +39,26 @@ Feature: Native application settings
     Then the provider status becomes Configured
     And the stored API key is not displayed
 
+  Scenario: AT-SETTINGS-001 — Verify access for a new OpenAI API key
+    When the user opens the OpenAI provider configuration
+    And enters a valid API key
+    And stops typing for at least 600 milliseconds
+    Then Whistt checks access to "gpt-transcribe"
+    And Whistt checks access to "gpt-live-transcribe"
+    And the result for each model is displayed
+    And the API key is not displayed outside the secure input field
+
+  Scenario: AT-SETTINGS-002 — Replace a pending model-access check
+    When the user changes the OpenAI API key before its access check finishes
+    Then the result from the earlier key is ignored
+    And only results for the latest key are displayed
+
+  Scenario: AT-SETTINGS-003 — Preserve a stored key after a verification failure
+    Given an OpenAI API key is already stored in Keychain
+    When a newly entered key cannot access a supported model
+    Then the stored key is not deleted or replaced until the user selects Save
+    And the unavailable model is identified without exposing either key
+
   Scenario: Approve launch at login in System Settings
     Given launch at login requires approval
     And the General settings pane remains open

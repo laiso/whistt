@@ -11,6 +11,8 @@ let waitSeconds: TimeInterval = TimeInterval(
 )
 let mode = ProcessInfo.processInfo.environment["PROBE_MODE"] ?? "ek-bearer-nada"
 let mintAuth = ProcessInfo.processInfo.environment["MINT_AUTH"] ?? "api-key"
+let requiresFinalTranscript = ProcessInfo.processInfo.environment["PROBE_REQUIRE_FINAL"] == "1"
+let audioFilePath = CommandLine.arguments.dropFirst().first
 
 // Report the auth the selected mode actually uses, not which tokens happen to exist.
 let authLabel: String = {
@@ -170,6 +172,8 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
     var task: URLSessionWebSocketTask!
     var done = false
     var sentUpdate = false
+    var sawFinalTranscript = false
+    var failureMessage: String?
     func urlSession(_ s: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol p: String?) {
         print("[probe] OPEN proto=\(p ?? "nil")"); fflush(stdout)
     }
@@ -183,7 +187,10 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
     func sendString(_ s: String, label: String) {
         print("[probe] -> \(label)"); fflush(stdout)
         task.send(.string(s)) { err in
-            if let err = err { print("[probe] send err: \(err.localizedDescription)") }
+            if let err = err {
+                self.failureMessage = "send error: \(err.localizedDescription)"
+                print("[probe] \(self.failureMessage!)")
+            }
         }
     }
     func urlSession(_ s: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith c: URLSessionWebSocketTask.CloseCode, reason: Data?) {
@@ -192,7 +199,10 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
     }
     func urlSession(_ s: URLSession, task: URLSessionTask, didCompleteWithError err: Error?) {
         if let http = task.response as? HTTPURLResponse { print("[probe] HTTP \(http.statusCode)") }
-        if let err = err { print("[probe] TASK ERR \(err.localizedDescription)") }
+        if let err = err {
+            failureMessage = "task error: \(err.localizedDescription)"
+            print("[probe] TASK ERR \(err.localizedDescription)")
+        }
         fflush(stdout)
     }
     var sentAudio = false
@@ -203,6 +213,20 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
             case .success(let m):
                 if case .string(let s) = m {
                     print("[probe] <- \(s)"); fflush(stdout)
+                    if let event = RealtimeEvent.decode(from: Data(s.utf8)) {
+                        switch event {
+                        case .finalTranscript(let text):
+                            if !text.isEmpty { self.sawFinalTranscript = true }
+                        case .conversationItem(let transcripts):
+                            if transcripts.contains(where: { !$0.isEmpty }) { self.sawFinalTranscript = true }
+                        case .transcriptionFailed(let code, let message):
+                            self.failureMessage = "transcription failed [\(code)]: \(message)"
+                        case .error(let message):
+                            self.failureMessage = "OpenAI error: \(message)"
+                        default:
+                            break
+                        }
+                    }
                     if !self.sentUpdate, s.contains("\"session.created\"") {
                         self.sentUpdate = true
                         self.onSessionCreated()
@@ -220,19 +244,35 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
     }
 
     func sendTestAudio() {
-        // 2s of 440 Hz sine, pcm16 mono @ 24kHz, sent in 100ms chunks
         let chunkFrames = 2_400  // 100ms at 24kHz
-        let totalFrames = 48_000
-        var time = 0
-        for _ in 0..<(totalFrames / chunkFrames) {
-            var pcm = [Int16](repeating: 0, count: chunkFrames)
-            for i in 0..<chunkFrames {
-                let t = Double(time + i) / 24000.0
+        let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
+        let audio: Data
+        if let audioFilePath {
+            do {
+                audio = try PCM16AudioFixture.load(path: audioFilePath)
+                print("[probe] audio fixture bytes=\(audio.count)")
+            } catch {
+                failureMessage = "could not read audio fixture: \(error.localizedDescription)"
+                print("[probe] \(failureMessage!)")
+                return
+            }
+        } else {
+            // A tone is useful for connection diagnostics. E2E transcription tests
+            // pass a raw speech fixture instead.
+            let totalFrames = 48_000
+            var pcm = [Int16](repeating: 0, count: totalFrames)
+            for i in 0..<totalFrames {
+                let t = Double(i) / 24000.0
                 pcm[i] = Int16(sin(2.0 * .pi * 440.0 * t) * 0.3 * Double(Int16.max))
             }
-            let data = pcm.withUnsafeBufferPointer { Data(buffer: $0) }
-            sendString(RealtimeMessage.audioAppend(data), label: RealtimeOutgoingType.audioAppend.rawValue)
-            time += chunkFrames
+            audio = pcm.withUnsafeBufferPointer { Data(buffer: $0) }
+        }
+        for offset in stride(from: 0, to: audio.count, by: chunkBytes) {
+            let end = min(offset + chunkBytes, audio.count)
+            sendString(
+                RealtimeMessage.audioAppend(audio.subdata(in: offset..<end)),
+                label: RealtimeOutgoingType.audioAppend.rawValue
+            )
         }
         // Give the server a beat before commit.
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) { [weak self] in
@@ -245,7 +285,7 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
         switch action {
         case "realtime-text-only":
             do {
-                let json = try RealtimeMessage.sessionUpdate(model: "gpt-transcribe")
+                let json = try RealtimeMessage.sessionUpdate(model: model)
                 sendString(json, label: RealtimeOutgoingType.sessionUpdate.rawValue)
             } catch {
                 print("[probe] session.update encode failed: \(error.localizedDescription)")
@@ -259,7 +299,7 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
                     "audio": [
                         "input": [
                             "format": ["type": "audio/pcm", "rate": 24000],
-                            "transcription": ["model": "gpt-transcribe"]
+                            "transcription": ["model": model]
                         ]
                     ]
                 ]
@@ -271,7 +311,7 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
                     "type": "transcription",
                     "audio": [
                         "input": [
-                            "transcription": ["model": "gpt-transcribe"]
+                            "transcription": ["model": model]
                         ]
                     ]
                 ]
@@ -298,3 +338,11 @@ RunLoop.main.run(until: Date(timeIntervalSinceNow: waitSeconds))
 p.done = true
 p.task.cancel()
 print("[probe] done")
+if let failureMessage = p.failureMessage {
+    FileHandle.standardError.write("[probe] FAILED: \(failureMessage)\n".data(using: .utf8)!)
+    exit(1)
+}
+if requiresFinalTranscript && !p.sawFinalTranscript {
+    FileHandle.standardError.write("[probe] FAILED: no final transcript received\n".data(using: .utf8)!)
+    exit(1)
+}

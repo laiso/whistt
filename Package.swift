@@ -39,6 +39,7 @@ let package = Package(
                 "TranscriptionProvider.swift",
                 "TranscriptionTransport.swift",
                 "FinalTranscriptOutputGate.swift",
+                "PCM16AudioFixture.swift",
                 "AudioStreamSender.swift",
                 "ShortcutBinding.swift",
                 "ShortcutEngine.swift",
