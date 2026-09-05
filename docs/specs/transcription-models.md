@@ -12,6 +12,7 @@ This specification defines the transcription models exposed by Whistt.
 | Meta | `muse-voice-transcribe-1.0` | Final transcript only | $0.18 |
 | xAI | `xai-streaming-stt` | Revisable interim results kept internal; final transcript is inserted | $0.20 |
 | Microsoft Azure | `mai-transcribe-2` | Final transcript only; preview | $0.10* |
+| ElevenLabs | `scribe_v2_realtime` | Revisable interim results kept internal; final transcript is inserted after a manual commit | $0.39 |
 
 ## Requirements
 
@@ -30,6 +31,7 @@ This specification defines the transcription models exposed by Whistt.
 - `TranscriptionModelCatalogTests` verifies the supported model order, default and stale-value fallback, provider grouping, reference-price coverage, and display labels.
 - `FinalTranscriptOutputGateTests` verifies that interim events remain internal, completed transcripts are emitted once, and a new capture resets duplicate suppression.
 - `RealtimeProtocolTests` verifies that the selected model is encoded into the OpenAI transcription session and that delta and final event variants decode correctly.
+- `ElevenLabsScribeProtocolTests` verifies WebSocket URL query parameters, audio chunk encoding, commit messages, and partial/committed/error event decoding.
 
 The opt-in `Tests/E2E/run-openai-transcription.sh` test connects the shared OpenAI probe to the production Realtime API with both supported OpenAI models. It sends a caller-provided 16-bit, 24 kHz, mono PCM speech fixture in raw or WAVE form and requires a committed turn and a non-empty final transcript. Set `OPENAI_API_KEY` and `WHISTT_E2E_AUDIO_FILE`, then run `make test-e2e-openai`. Set `WHISTT_E2E_EXPECTED_TEXT` when the fixture has a stable phrase that must appear in the result. This test is intentionally excluded from CI because it requires a secret, consumes a billed external service, and depends on model availability.
 

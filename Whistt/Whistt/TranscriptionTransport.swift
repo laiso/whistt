@@ -40,6 +40,8 @@ public enum TranscriptionTransportFactory {
             return XaiTranscriptionTransport(apiKey: apiKey)
         case .azure:
             return AzureVoiceLiveTransport(apiKey: apiKey, model: model)
+        case .elevenLabs:
+            return ElevenLabsScribeTransport(apiKey: apiKey, model: model)
         }
     }
 }
