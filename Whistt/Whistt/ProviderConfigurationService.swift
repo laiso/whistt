@@ -1,5 +1,102 @@
 import Foundation
 
+public enum OpenAIModelAccessStatus: Equatable {
+    case available
+    case unavailable(String)
+}
+
+public struct OpenAIModelAccess: Identifiable, Equatable {
+    public let model: String
+    public let status: OpenAIModelAccessStatus
+
+    public var id: String { model }
+}
+
+public typealias OpenAIModelAccessRequest = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+public typealias OpenAIModelAccessCheck = @Sendable (String, [String]) async -> [OpenAIModelAccess]
+public typealias OpenAIModelAccessPause = @Sendable () async throws -> Void
+
+public enum OpenAIModelAccessValidator {
+    public static func validate(rawAPIKey: String, models: [String]) async -> [OpenAIModelAccess]? {
+        await validate(
+            rawAPIKey: rawAPIKey,
+            models: models,
+            pause: { try await Task.sleep(for: .milliseconds(600)) },
+            check: { apiKey, models in
+                await OpenAIModelAccessChecker.check(apiKey: apiKey, models: models)
+            }
+        )
+    }
+
+    public static func validate(
+        rawAPIKey: String,
+        models: [String],
+        pause: OpenAIModelAccessPause,
+        check: OpenAIModelAccessCheck
+    ) async -> [OpenAIModelAccess]? {
+        let apiKey = rawAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else { return [] }
+        do {
+            try await pause()
+        } catch {
+            return nil
+        }
+        guard !Task.isCancelled else { return nil }
+        let results = await check(apiKey, models)
+        guard !Task.isCancelled else { return nil }
+        return results
+    }
+}
+
+public enum OpenAIModelAccessChecker {
+    public static func check(apiKey: String, models: [String]) async -> [OpenAIModelAccess] {
+        await check(apiKey: apiKey, models: models) { request in
+            try await URLSession.shared.data(for: request)
+        }
+    }
+
+    public static func check(
+        apiKey: String,
+        models: [String],
+        request: @escaping OpenAIModelAccessRequest
+    ) async -> [OpenAIModelAccess] {
+        await withTaskGroup(of: OpenAIModelAccess.self) { group in
+            for model in models {
+                group.addTask { await check(apiKey: apiKey, model: model, request: request) }
+            }
+            var results: [String: OpenAIModelAccess] = [:]
+            for await result in group { results[result.model] = result }
+            return models.compactMap { results[$0] }
+        }
+    }
+
+    private static func check(
+        apiKey: String,
+        model: String,
+        request performRequest: OpenAIModelAccessRequest
+    ) async -> OpenAIModelAccess {
+        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/models/\(model)")!)
+        request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await performRequest(request)
+            guard let http = response as? HTTPURLResponse else {
+                return OpenAIModelAccess(model: model, status: .unavailable("Could not verify access."))
+            }
+            if http.statusCode == 200 {
+                return OpenAIModelAccess(model: model, status: .available)
+            }
+            let message = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])
+                .flatMap { $0["error"] as? [String: Any] }?["message"] as? String
+            return OpenAIModelAccess(
+                model: model,
+                status: .unavailable(message ?? "OpenAI returned HTTP \(http.statusCode).")
+            )
+        } catch {
+            return OpenAIModelAccess(model: model, status: .unavailable(error.localizedDescription))
+        }
+    }
+}
+
 public enum ProviderConfigurationStatus: Equatable {
     case configured
     case notConfigured

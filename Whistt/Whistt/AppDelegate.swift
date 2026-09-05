@@ -11,41 +11,17 @@ private enum StatusIcon: Equatable {
     case warning
 }
 
-// Models known to work over the GA Realtime WS endpoint (validated via realtime-probe).
-// Grouped by transcription delivery: streaming sends per-word deltas live, final-only
-// returns the entire transcript at commit time.
-struct ModelGroup: Identifiable {
-    let title: String
-    let provider: TranscriptionProvider
-    let streamsDeltas: Bool
-    let models: [String]
+let modelGroups = TranscriptionModelCatalog.groups
 
-    var id: String { title }
+func modelDisplayName(_ name: String, vendor: String) -> String {
+    TranscriptionModelCatalog.displayName(for: name, vendor: vendor)
 }
 
-let modelGroups: [ModelGroup] = [
-    ModelGroup(title: "OpenAI — realtime", provider: .openAI, streamsDeltas: true, models: [
-        "gpt-realtime-whisper",
-    ]),
-    ModelGroup(title: "Google Gemini — final only", provider: .gemini, streamsDeltas: false, models: [
-        "gemini-3.5-transcribe-live",
-    ]),
-    ModelGroup(title: "Meta — final only", provider: .meta, streamsDeltas: false, models: [
-        "muse-voice-transcribe-1.0",
-    ]),
-    ModelGroup(title: "xAI — final only", provider: .xAI, streamsDeltas: false, models: [
-        "xai-streaming-stt",
-    ]),
-    ModelGroup(title: "Microsoft Azure Voice Live — final only (preview)", provider: .azure, streamsDeltas: false, models: [
-        "mai-transcribe-2",
-    ]),
-]
+private let availableModels = TranscriptionModelCatalog.models
+private let defaultModel = TranscriptionModelCatalog.defaultModel
 
-private let availableModels: [String] = modelGroups.flatMap(\.models)
-private let defaultModel = availableModels[0]
-
-private func groupTitle(forModel name: String) -> String? {
-    modelGroups.first { $0.models.contains(name) }?.title
+private func vendorName(forModel name: String) -> String? {
+    modelGroups.first { $0.models.contains(name) }?.vendor
 }
 
 private let modelDefaultsKey = "WHISTT_MODEL"
@@ -92,13 +68,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var transcriptionFailed = false
     private var lastPresentedTranscriptionError: String?
     // Set when a cancelled shortcut gesture discards an in-flight capture;
-    // its pending deltas and final transcript are ignored.
+    // its pending final transcript is ignored.
     private var discardCurrentCapture = false
     // Modifier-only gestures remain cancellable until the modifier is released.
     // Keep their output local so a later Control-C/mouse press cannot leave
     // already-typed text behind.
     private var modifierOnlyCapturePending = false
-    private var bufferedModifierOnlyDeltas = ""
     private var bufferedModifierOnlyFinals: [String] = []
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -109,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let savedModel = UserDefaults.standard.string(forKey: modelDefaultsKey)
         let envModel = EnvLoader.value(for: "WHISTT_MODEL")
         let preferredModel = savedModel ?? envModel
-        currentModel = preferredModel.flatMap { availableModels.contains($0) ? $0 : nil } ?? defaultModel
+        currentModel = TranscriptionModelCatalog.resolve(preferred: preferredModel)
         if savedModel != nil, savedModel != currentModel {
             UserDefaults.standard.set(currentModel, forKey: modelDefaultsKey)
         }
@@ -136,7 +111,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 self.transcriptionFailed = false
                 self.discardCurrentCapture = false
                 self.modifierOnlyCapturePending = self.currentBinding.isModifierOnly
-                self.bufferedModifierOnlyDeltas = ""
                 self.bufferedModifierOnlyFinals.removeAll(keepingCapacity: true)
                 self.lastPresentedTranscriptionError = nil
                 self.setStatusIcon(.active)
@@ -175,7 +149,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // discarded capture.
                 self.discardCurrentCapture = true
                 self.modifierOnlyCapturePending = false
-                self.bufferedModifierOnlyDeltas = ""
                 self.bufferedModifierOnlyFinals.removeAll(keepingCapacity: true)
                 _ = self.agent?.stop()
                 if self.currentStatusIcon == .active { self.setStatusIcon(.idle) }
@@ -230,12 +203,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
         let agent = WhisperNativeAgent(apiKey: key, model: currentModel, provider: currentProvider)
-        agent.onTranscriptDelta = { [weak self] delta in
-            DispatchQueue.main.async { self?.handle(delta: delta) }
-        }
-        agent.onOutputOps = { [weak self] ops in
-            DispatchQueue.main.async { self?.handle(ops: ops) }
-        }
         agent.onTranscriptComplete = { [weak self] full in
             DispatchQueue.main.async { self?.handleFinal(full) }
         }
@@ -256,40 +223,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         self.agent = agent
     }
 
-    private func handle(delta: String) {
-        if discardCurrentCapture { return }
-        if modifierOnlyCapturePending {
-            bufferedModifierOnlyDeltas += delta
-            return
-        }
-        output(delta: delta)
-    }
-
-    /// Cursor corrections for providers that opt into visible revision
-    /// streaming. xAI currently keeps revisions internal and emits final only.
-    private func handle(ops: [TranscriptOutputOp]) {
-        guard !discardCurrentCapture else { return }
-        guard !modifierOnlyCapturePending else { return }
-        guard outputMode == .typing, currentModelStreamsDeltas else { return }
-        for op in ops {
-            switch op {
-            case .erase(let count): TypingEmulator.erase(count: count)
-            case .type(let text): TypingEmulator.type(text)
-            }
-        }
-    }
-
-    private func output(delta: String) {
-        switch outputMode {
-        case .typing:
-            TypingEmulator.type(delta)
-        case .clipboard:
-            // Writing per-delta would spam clipboard-history tools with every intermediate
-            // state. Wait for the final transcript so only one entry is captured.
-            break
-        }
-    }
-
     private func handleFinal(_ full: String) {
         if discardCurrentCapture {
             // The capture was cancelled; keep swallowing every result from
@@ -307,14 +240,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private func outputFinal(_ full: String) {
         switch outputMode {
-        case .typing where !currentModelStreamsDeltas:
+        case .typing:
             TypingEmulator.type(full)
         case .clipboard:
             ClipboardOutput.set(full)
-        case .typing:
-            // Streaming models have already typed every delta; typing the final again
-            // would duplicate the transcript.
-            break
         }
         WhisttLog.event("timing provider=\(currentProvider.rawValue) milestone=output_applied mode=\(outputMode.rawValue) chars=\(full.count)")
         if currentStatusIcon != .active { setStatusIcon(.idle) }
@@ -323,11 +252,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func commitModifierOnlyOutputIfNeeded() {
         guard modifierOnlyCapturePending else { return }
         modifierOnlyCapturePending = false
-
-        if !bufferedModifierOnlyDeltas.isEmpty {
-            output(delta: bufferedModifierOnlyDeltas)
-        }
-        bufferedModifierOnlyDeltas = ""
 
         let finals = bufferedModifierOnlyFinals
         bufferedModifierOnlyFinals.removeAll(keepingCapacity: true)
@@ -381,20 +305,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         menu.addItem(.separator())
 
         let modelHeaderTitle: String
-        if let kind = groupTitle(forModel: currentModel) {
-            modelHeaderTitle = "Model: \(currentModel) (\(kind))"
+        if let vendor = vendorName(forModel: currentModel) {
+            modelHeaderTitle = "Model: \(vendor) · \(currentModel)"
         } else {
             modelHeaderTitle = "Model: \(currentModel)"
         }
         let modelHeader = NSMenuItem(title: modelHeaderTitle, action: nil, keyEquivalent: "")
         let modelSubmenu = NSMenu()
-        for (idx, group) in modelGroups.enumerated() {
-            if idx > 0 { modelSubmenu.addItem(.separator()) }
-            let section = NSMenuItem(title: group.title, action: nil, keyEquivalent: "")
-            section.isEnabled = false
-            modelSubmenu.addItem(section)
+        for group in modelGroups {
             for name in group.models {
-                let it = NSMenuItem(title: name, action: #selector(selectModel(_:)), keyEquivalent: "")
+                let it = NSMenuItem(title: modelDisplayName(name, vendor: group.vendor), action: #selector(selectModel(_:)), keyEquivalent: "")
                 it.target = self
                 it.state = (name == currentModel) ? .on : .off
                 it.representedObject = name
@@ -441,10 +361,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private var currentProvider: TranscriptionProvider {
         modelGroups.first { $0.models.contains(currentModel) }?.provider ?? .openAI
-    }
-
-    private var currentModelStreamsDeltas: Bool {
-        modelGroups.first { $0.models.contains(currentModel) }?.streamsDeltas ?? false
     }
 
     private func resolveAPIKey(for provider: TranscriptionProvider, promptIfMissing: Bool = true) -> String? {

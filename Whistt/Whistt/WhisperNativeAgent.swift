@@ -12,7 +12,7 @@ final class WhisperNativeAgent: NSObject {
     private var isRunning = false
     private let bytesLock = NSLock()
     private var _bytesSent = 0
-    private var lastDeliveredTranscript: String?
+    private var outputGate = FinalTranscriptOutputGate()
     private var sessionStartedAt: TimeInterval?
     private var connectStartedAt: TimeInterval?
     private var inputEndedAt: TimeInterval?
@@ -23,17 +23,10 @@ final class WhisperNativeAgent: NSObject {
     private var sessionGeneration = 0
     private static let finalGraceSeconds: TimeInterval = 5.0
 
-    var onTranscriptDelta: ((String) -> Void)?
-    // Cursor output operations for providers that stream revisable interims
-    // (currently xAI). Applied in order by the output layer.
-    var onOutputOps: (([TranscriptOutputOp]) -> Void)?
     var onTranscriptComplete: ((String) -> Void)?
     var onError: ((String) -> Void)?
-    // Created lazily on the first revision event; only revision-streaming
-    // providers need cursor correction.
-    private var revisionBuffer: TranscriptRevisionBuffer?
 
-    init(apiKey: String, model: String = "gpt-realtime-whisper", provider: TranscriptionProvider = .openAI) {
+    init(apiKey: String, model: String = "gpt-transcribe", provider: TranscriptionProvider = .openAI) {
         self.apiKey = apiKey
         self.model = model
         self.provider = provider
@@ -53,8 +46,7 @@ final class WhisperNativeAgent: NSObject {
         sessionGeneration += 1
         let generation = sessionGeneration
         resetBytes()
-        lastDeliveredTranscript = nil
-        revisionBuffer = nil
+        outputGate.reset()
         sessionStartedAt = ProcessInfo.processInfo.systemUptime
         connectStartedAt = nil
         inputEndedAt = nil
@@ -148,24 +140,12 @@ final class WhisperNativeAgent: NSObject {
                 WhisttLog.debugEvent("replacement partial chars=\(text.count)")
             } else {
                 WhisttLog.delta(text)
-                onTranscriptDelta?(text)
             }
         case .revision(let revision):
             logFirstTranscriptIfNeeded(kind: "partial")
-            let buffer: TranscriptRevisionBuffer
-            if let existing = revisionBuffer {
-                buffer = existing
-            } else {
-                buffer = TranscriptRevisionBuffer()
-                revisionBuffer = buffer
-            }
-            let ops = buffer.apply(revision)
-            if !ops.isEmpty {
-                WhisttLog.debugEvent(
-                    "revision ops=\(ops.count) confirmedChars=\(revision.confirmedText.count) interimChars=\(revision.interimText.count)"
-                )
-                onOutputOps?(ops)
-            }
+            WhisttLog.debugEvent(
+                "revision kept internal confirmedChars=\(revision.confirmedText.count) interimChars=\(revision.interimText.count)"
+            )
         case .final(let text):
             logFirstTranscriptIfNeeded(kind: "final")
             WhisttLog.event(
@@ -174,11 +154,9 @@ final class WhisperNativeAgent: NSObject {
                     + "afterInputEndMs=\(elapsedMilliseconds(since: inputEndedAt)) chars=\(text.count)"
             )
             WhisttLog.final(text)
-            if revisionBuffer != nil {
-                let ops = revisionBuffer!.applyFinal(text)
-                if !ops.isEmpty { onOutputOps?(ops) }
+            if let completed = outputGate.consume(event) {
+                onTranscriptComplete?(completed)
             }
-            deliverComplete(text)
         case .turnComplete:
             WhisttLog.event("turn complete")
         case .unknown(let type):
@@ -200,12 +178,6 @@ final class WhisperNativeAgent: NSObject {
     private func elapsedMilliseconds(since start: TimeInterval?) -> Int {
         guard let start else { return -1 }
         return max(0, Int(((ProcessInfo.processInfo.systemUptime - start) * 1_000).rounded()))
-    }
-
-    private func deliverComplete(_ transcript: String) {
-        guard transcript != lastDeliveredTranscript else { return }
-        lastDeliveredTranscript = transcript
-        onTranscriptComplete?(transcript)
     }
 
     private func startAudio() {

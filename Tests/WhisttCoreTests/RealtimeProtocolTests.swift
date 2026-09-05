@@ -6,7 +6,7 @@ final class RealtimeProtocolTests: XCTestCase {
     // MARK: - SessionUpdate Codable shape
 
     func testSessionUpdateShape() throws {
-        let json = try RealtimeMessage.sessionUpdate(model: "gpt-realtime-whisper")
+        let json = try RealtimeMessage.sessionUpdate(model: "gpt-transcribe")
         let decoded = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
         XCTAssertEqual(decoded?["type"] as? String, "session.update")
 
@@ -23,7 +23,7 @@ final class RealtimeProtocolTests: XCTestCase {
         XCTAssertEqual(format["rate"] as? Int, 24000)
 
         let trans = try XCTUnwrap(input["transcription"] as? [String: Any])
-        XCTAssertEqual(trans["model"] as? String, "gpt-realtime-whisper")
+        XCTAssertEqual(trans["model"] as? String, "gpt-transcribe")
 
         // The `turn_detection` field MUST be present as JSON null — not absent.
         // Disables server VAD so we can manually commit on hotkey release.
