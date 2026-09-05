@@ -1,5 +1,52 @@
 import Foundation
 
+public enum OpenAIModelAccessStatus: Equatable {
+    case available
+    case unavailable(String)
+}
+
+public struct OpenAIModelAccess: Identifiable, Equatable {
+    public let model: String
+    public let status: OpenAIModelAccessStatus
+
+    public var id: String { model }
+}
+
+public enum OpenAIModelAccessChecker {
+    public static func check(apiKey: String, models: [String]) async -> [OpenAIModelAccess] {
+        await withTaskGroup(of: OpenAIModelAccess.self) { group in
+            for model in models {
+                group.addTask { await check(apiKey: apiKey, model: model) }
+            }
+            var results: [String: OpenAIModelAccess] = [:]
+            for await result in group { results[result.model] = result }
+            return models.compactMap { results[$0] }
+        }
+    }
+
+    private static func check(apiKey: String, model: String) async -> OpenAIModelAccess {
+        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/models/\(model)")!)
+        request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return OpenAIModelAccess(model: model, status: .unavailable("Could not verify access."))
+            }
+            if http.statusCode == 200 {
+                return OpenAIModelAccess(model: model, status: .available)
+            }
+            let message = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])
+                .flatMap { $0["error"] as? [String: Any] }?["message"] as? String
+            return OpenAIModelAccess(
+                model: model,
+                status: .unavailable(message ?? "OpenAI returned HTTP \(http.statusCode).")
+            )
+        } catch {
+            return OpenAIModelAccess(model: model, status: .unavailable(error.localizedDescription))
+        }
+    }
+}
+
 public enum ProviderConfigurationStatus: Equatable {
     case configured
     case notConfigured

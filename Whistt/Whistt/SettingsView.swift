@@ -163,10 +163,8 @@ private struct GeneralSettingsView: View {
                     set: { appDelegate.applyModel($0) }
                 )) {
                     ForEach(modelGroups) { group in
-                        Section(group.title) {
-                            ForEach(group.models, id: \.self) { model in
-                                Text(model).tag(model)
-                            }
+                        ForEach(group.models, id: \.self) { model in
+                            Text(modelDisplayName(model, vendor: group.vendor)).tag(model)
                         }
                     }
                 }
@@ -365,6 +363,8 @@ private struct ProviderConfigurationSheet: View {
     @State private var azureEndpoint: String
     @State private var errorMessage: String?
     @State private var confirmsRemoval = false
+    @State private var isCheckingOpenAIModels = false
+    @State private var openAIModelAccess: [OpenAIModelAccess] = []
 
     init(provider: TranscriptionProvider, appDelegate: AppDelegate) {
         self.provider = provider
@@ -390,6 +390,10 @@ private struct ProviderConfigurationSheet: View {
             }
             .formStyle(.grouped)
 
+            if provider == .openAI, !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                openAIModelAccessView
+            }
+
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
@@ -413,6 +417,7 @@ private struct ProviderConfigurationSheet: View {
                     save()
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(provider == .openAI && isCheckingOpenAIModels)
             }
         }
         .padding(24)
@@ -435,6 +440,60 @@ private struct ProviderConfigurationSheet: View {
                  ? "The API key and Voice Live endpoint will be removed."
                  : "The API key will be removed from the macOS Keychain.")
         }
+        .task(id: apiKey) {
+            await checkOpenAIModelsAfterTypingPause()
+        }
+    }
+
+    @ViewBuilder
+    private var openAIModelAccessView: some View {
+        if isCheckingOpenAIModels {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Checking model access…")
+            }
+            .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(openAIModelAccess) { result in
+                    switch result.status {
+                    case .available:
+                        Label("\(result.model): Available", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    case .unavailable(let message):
+                        Label("\(result.model): Not available", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .help(message)
+                    }
+                }
+            }
+            .font(.callout)
+        }
+    }
+
+    private func checkOpenAIModelsAfterTypingPause() async {
+        guard provider == .openAI else { return }
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            isCheckingOpenAIModels = false
+            openAIModelAccess = []
+            return
+        }
+        isCheckingOpenAIModels = true
+        openAIModelAccess = []
+        do {
+            try await Task.sleep(for: .milliseconds(600))
+        } catch {
+            return
+        }
+        guard !Task.isCancelled else { return }
+        let models = modelGroups
+            .filter { $0.provider == .openAI }
+            .flatMap(\.models)
+        let results = await OpenAIModelAccessChecker.check(apiKey: key, models: models)
+        guard !Task.isCancelled else { return }
+        openAIModelAccess = results
+        isCheckingOpenAIModels = false
     }
 
     private func save() {

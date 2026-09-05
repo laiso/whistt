@@ -1,7 +1,7 @@
 import Foundation
 import WhisttCore
 
-let model = EnvLoader.value(for: "WHISTT_MODEL") ?? "gpt-realtime-whisper"
+let model = EnvLoader.value(for: "WHISTT_MODEL") ?? "gpt-transcribe"
 let apiKey = EnvLoader.value(for: "OPENAI_API_KEY")
 let subscriptionAccessToken = EnvLoader.value(for: "CHATGPT_ACCESS_TOKEN")
     ?? EnvLoader.value(for: "OPENAI_OAUTH_ACCESS_TOKEN")
@@ -245,7 +245,7 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
         switch action {
         case "realtime-text-only":
             do {
-                let json = try RealtimeMessage.sessionUpdate(model: "gpt-realtime-whisper")
+                let json = try RealtimeMessage.sessionUpdate(model: "gpt-transcribe")
                 sendString(json, label: RealtimeOutgoingType.sessionUpdate.rawValue)
             } catch {
                 print("[probe] session.update encode failed: \(error.localizedDescription)")
@@ -259,7 +259,7 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
                     "audio": [
                         "input": [
                             "format": ["type": "audio/pcm", "rate": 24000],
-                            "transcription": ["model": "gpt-realtime-whisper"]
+                            "transcription": ["model": "gpt-transcribe"]
                         ]
                     ]
                 ]
@@ -271,7 +271,7 @@ final class Probe: NSObject, URLSessionWebSocketDelegate {
                     "type": "transcription",
                     "audio": [
                         "input": [
-                            "transcription": ["model": "gpt-realtime-whisper"]
+                            "transcription": ["model": "gpt-transcribe"]
                         ]
                     ]
                 ]

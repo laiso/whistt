@@ -7,6 +7,8 @@
 - Whistt shall persist the output mode and recording-start sound preference between launches.
 - Whistt shall manage launch-at-login through the macOS login-item service and surface approval or registration errors near the toggle.
 - Whistt shall never display an API key that is already stored in Keychain.
+- While a newly entered OpenAI API key remains in the configuration sheet, Whistt shall check access to every supported OpenAI transcription model after a short typing pause and show the result for each model without displaying the key.
+- Model-access verification failure shall not delete or replace a previously stored API key. Network and permission failures shall be presented as availability results rather than treated as proof that the key is invalid.
 - When the selected provider is incomplete, Whistt shall open Settings on the Providers tab.
 
 ## Automated coverage

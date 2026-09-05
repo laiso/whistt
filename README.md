@@ -17,9 +17,9 @@ Bring your own credentials and switch between OpenAI Realtime, Google Gemini Liv
 | xAI | Streaming STT | Revising internally (final only) | API key | **$0.20** |
 | OpenAI | `gpt-transcribe` | None (after-turn transcription) | API key | **$0.27** |
 | Gemini | `gemini-3.5-transcribe-live` | Revising (not typed) | API key | **approx. $0.54** |
-| OpenAI | `gpt-realtime-whisper` | Streaming deltas (typed live) | API key | **$1.02** |
+| OpenAI | `gpt-live-transcribe` | None (after-turn transcription) | API key | **$1.02** |
 
-Reference prices as of September 2026. ※ Azure's introductory rate and any additional Voice Live charges should be confirmed on your bill. `gpt-transcribe` is not yet selectable in Whistt.
+Reference prices as of September 2026. ※ Azure's introductory rate and any additional Voice Live charges should be confirmed on your bill.
 
 ## Requirements
 
