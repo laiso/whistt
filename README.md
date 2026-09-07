@@ -6,7 +6,7 @@ Hold **Right Option**, speak, and release. Whistt types the transcript at your c
 
 ![Whistt demo](assets/demo.gif)
 
-Bring your own credentials and switch between OpenAI Realtime, Google Gemini Live, Meta Muse Voice Transcribe, xAI Speech-to-Text, Microsoft Azure Voice Live, and ElevenLabs Scribe v2 Realtime.
+Bring your own credentials and switch between OpenAI Realtime, Google Gemini Live, Meta Muse Voice Transcribe, xAI Speech-to-Text, and Microsoft Azure Voice Live.
 
 ## Provider comparison
 
@@ -16,7 +16,6 @@ Bring your own credentials and switch between OpenAI Realtime, Google Gemini Liv
 | Meta | `muse-voice-transcribe-1.0` | None (final only) | API key | **$0.18** |
 | xAI | Streaming STT | Revising internally (final only) | API key | **$0.20** |
 | OpenAI | `gpt-transcribe` | None (after-turn transcription) | API key | **$0.27** |
-| ElevenLabs | `scribe_v2_realtime` | Revising (not typed) | API key | **$0.39** |
 | Gemini | `gemini-3.5-transcribe-live` | Revising (not typed) | API key | **approx. $0.54** |
 | OpenAI | `gpt-live-transcribe` | None (after-turn transcription) | API key | **$1.02** |
 
@@ -25,7 +24,7 @@ Reference prices as of September 2026. ※ Azure's introductory rate and any add
 ## Requirements
 
 - macOS 26.2+
-- Credentials for [OpenAI](https://platform.openai.com/api-keys), [Gemini](https://aistudio.google.com/app/apikey), [Meta](https://dev.meta.ai/), [xAI](https://console.x.ai/), Azure Voice Live, or [ElevenLabs](https://elevenlabs.io/app/settings/api-keys)
+- Credentials for [OpenAI](https://platform.openai.com/api-keys), [Gemini](https://aistudio.google.com/app/apikey), [Meta](https://dev.meta.ai/), [xAI](https://console.x.ai/), or Azure Voice Live
 
 ## Install
 

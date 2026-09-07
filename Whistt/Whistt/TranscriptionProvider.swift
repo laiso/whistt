@@ -4,7 +4,6 @@ public enum TranscriptionProvider: String, CaseIterable, Identifiable {
     case meta
     case xAI
     case azure
-    case elevenLabs
 
     public var id: String { rawValue }
 
@@ -15,7 +14,6 @@ public enum TranscriptionProvider: String, CaseIterable, Identifiable {
         case .meta: return "META_API_KEY"
         case .xAI: return "XAI_API_KEY"
         case .azure: return "AZURE_SPEECH_API_KEY"
-        case .elevenLabs: return "ELEVENLABS_API_KEY"
         }
     }
 
@@ -26,7 +24,6 @@ public enum TranscriptionProvider: String, CaseIterable, Identifiable {
         case .meta: return "Meta"
         case .xAI: return "xAI"
         case .azure: return "Azure"
-        case .elevenLabs: return "ElevenLabs"
         }
     }
 }

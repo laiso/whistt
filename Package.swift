@@ -13,8 +13,7 @@ let package = Package(
         .executable(name: "gemini-live-probe", targets: ["GeminiLiveProbe"]),
         .executable(name: "meta-live-probe", targets: ["MetaLiveProbe"]),
         .executable(name: "azure-voice-live-probe", targets: ["AzureVoiceLiveProbe"]),
-        .executable(name: "xai-live-probe", targets: ["XaiLiveProbe"]),
-        .executable(name: "elevenlabs-scribe-probe", targets: ["ElevenLabsScribeProbe"])
+        .executable(name: "xai-live-probe", targets: ["XaiLiveProbe"])
     ],
     targets: [
         .target(
@@ -55,9 +54,7 @@ let package = Package(
                 "XaiTranscriptionWS.swift",
                 "AzureVoiceLiveProtocol.swift",
                 "AzureVoiceLiveSettings.swift",
-                "AzureVoiceLiveWS.swift",
-                "ElevenLabsScribeProtocol.swift",
-                "ElevenLabsScribeWS.swift"
+                "AzureVoiceLiveWS.swift"
             ]
         ),
         .executableTarget(
@@ -84,11 +81,6 @@ let package = Package(
             name: "XaiLiveProbe",
             dependencies: ["WhisttCore"],
             path: "Tools/XaiLiveProbe"
-        ),
-        .executableTarget(
-            name: "ElevenLabsScribeProbe",
-            dependencies: ["WhisttCore"],
-            path: "Tools/ElevenLabsScribeProbe"
         ),
         .testTarget(
             name: "WhisttCoreTests",
