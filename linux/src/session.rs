@@ -569,6 +569,9 @@ impl Actor {
             "{id}: final transcript received ({} characters)",
             text.chars().count()
         ));
+        if log::transcripts_enabled() {
+            log::info(&format!("{id}: transcript text: {text}"));
+        }
         // Leave finalization before typing so a slow insertion cannot block the
         // next session, then deliver exactly once.
         self.discard();

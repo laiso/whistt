@@ -38,3 +38,17 @@ pub fn debug(message: &str) {
         eprintln!("whistt[debug]: {}{message}", elapsed());
     }
 }
+
+/// Whether transcript text may be logged. Off by default, and never enabled by
+/// `WHISTT_LOG=debug`, because a transcript is the user's speech. It exists so a
+/// report like "the first character is missing" can be split into "the
+/// transcript was short" and "the insertion dropped it".
+pub fn transcripts_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("WHISTT_LOG_TRANSCRIPTS").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes")
+        )
+    })
+}
