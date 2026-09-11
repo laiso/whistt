@@ -646,9 +646,19 @@ async fn transport_task(
     });
 
     // The writer drains in order, so the commit can never overtake audio.
+    let mut appended_any_audio = false;
     while let Some(command) = commands.recv().await {
         let result = match command {
-            TransportCommand::Audio(pcm) => writer.send_audio(pcm).await,
+            TransportCommand::Audio(pcm) => {
+                let result = writer.send_audio(pcm).await;
+                if result.is_ok() && !appended_any_audio {
+                    appended_any_audio = true;
+                    log::debug(&format!(
+                        "{session}: first audio append sent to the provider"
+                    ));
+                }
+                result
+            }
             TransportCommand::Commit => writer.commit().await,
         };
         if let Err(error) = result {

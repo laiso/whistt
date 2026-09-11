@@ -191,6 +191,22 @@ if [[ "$status" != "idle" ]]; then
   exit 1
 fi
 
+# Acceptance item: audio appends must reach the provider before the release.
+# The daemon logs the first socket write, so this is independent of when the
+# provider chooses to emit interim results.
+first_activity="$(grep -n "first audio append sent" "$daemon_log" | head -1 | cut -d: -f1)"
+release_line="$(grep -n "capture stopping" "$daemon_log" | head -1 | cut -d: -f1)"
+if [[ -z "$first_activity" || -z "$release_line" ]]; then
+  echo "FAIL: could not order the first audio append against the release" >&2
+  cat "$daemon_log" >&2
+  exit 1
+fi
+if (( first_activity > release_line )); then
+  echo "FAIL: the first append came after the release (line $first_activity > $release_line)" >&2
+  exit 1
+fi
+echo "appends before release: yes (first append at line $first_activity, release at line $release_line)"
+
 if [[ -n "$expected" ]]; then
   if ! grep -qiF -- "$expected" "$file"; then
     echo "FAIL: the transcript does not contain '$expected'" >&2
