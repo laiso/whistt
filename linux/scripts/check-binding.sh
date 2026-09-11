@@ -65,6 +65,18 @@ for bind in on_key:
     if bind.get("non_consuming"):
         problems.append(f"{bind.get('description')!r} is non-consuming")
 
+# A key that is itself a modifier needs the modifier named in the release bind.
+# Hyprland resolves a key event against the modifier state from before that key's
+# own modifier change, so a modmask-0 release bind for Control_R never matches
+# and the session runs until the recording limit instead of stopping.
+if len(press) == 1 and len(release) == 1 and key.endswith(("_L", "_R")):
+    if release[0].get("modmask") == press[0].get("modmask"):
+        problems.append(
+            f"{key!r} is a modifier but the release bind has modmask "
+            f"{release[0].get('modmask')} like the press bind; re-apply with a "
+            f"RELEASE_MODIFIER, for example: apply-binding.sh {key} CTRL"
+        )
+
 found = {b.get("description", "") for b in on_key}
 for want in sorted(ours_descriptions):
     if want not in found:
@@ -79,6 +91,9 @@ if foreign:
     problems.append("collision with another action: " + ", ".join(sorted(foreign)))
 
 print(f"{'binding on ' + key:46} {'ok' if not problems else 'FAIL'}")
+for bind in on_key:
+    kind = "release" if bind.get("release") else "press"
+    print(f"  {kind:8} modmask={bind.get('modmask')} repeat={bind.get('repeat')} {bind.get('description')!r}")
 for problem in problems:
     print(f"  - {problem}")
 sys.exit(1 if problems else 0)

@@ -3,9 +3,19 @@
 # Apply or remove the Whistt push-to-talk binding in the user's Hyprland config.
 #
 # Usage:
-#   scripts/apply-binding.sh <HYPRLAND_KEY>     # apply, for example code:58
-#   scripts/apply-binding.sh --remove           # roll back
-#   scripts/apply-binding.sh --show             # print the managed block
+#   scripts/apply-binding.sh <HYPRLAND_KEY> [RELEASE_MODIFIER]
+#   scripts/apply-binding.sh Control_R CTRL      # a lone modifier key
+#   scripts/apply-binding.sh Scroll_Lock         # an ordinary key
+#   scripts/apply-binding.sh --remove            # roll back
+#   scripts/apply-binding.sh --show              # print the managed block
+#
+# RELEASE_MODIFIER is needed when the key is itself a modifier. Hyprland looks up
+# a key event's bind using the modifier state from *before* that key's own
+# modifier change, so while releasing Control_R the Control modifier is still
+# held and a modmask-0 release bind never matches. Naming the modifier in the
+# release bind puts it in that bind's modmask, which is what Hyprland's own
+# documentation means by "binding mods" (bindr=ALT,Alt_L,...). The press bind
+# keeps modmask 0, which is correct because the modifier is not yet applied.
 #
 # The managed lines are wrapped in markers, so applying again replaces them and
 # removing deletes exactly them. The file is backed up before every change, and
@@ -20,11 +30,17 @@ bindings="${HYPRLAND_BINDINGS:-$HOME/.config/hypr/bindings.lua}"
 begin_marker="-- >>> whistt push-to-talk (managed by linux/scripts/apply-binding.sh) >>>"
 end_marker="-- <<< whistt push-to-talk (managed) <<<"
 
+# $1 key, $2 optional modifier to prefix the release bind with
 block() {
+  local key="$1"
+  local release_key="$1"
+  if [[ -n "${2:-}" ]]; then
+    release_key="$2 + $key"
+  fi
   cat <<EOF
 $begin_marker
-o.bind("$1", "Whistt push-to-talk (start)", "whistt record start")
-o.bind("$1", "Whistt push-to-talk (stop)", "whistt record stop", { release = true })
+o.bind("$key", "Whistt push-to-talk (start)", "whistt record start")
+o.bind("$release_key", "Whistt push-to-talk (stop)", "whistt record stop", { release = true })
 $end_marker
 EOF
 }
@@ -69,7 +85,7 @@ reload_and_validate() {
 
 case "${1:-}" in
   --show)
-    block "REPLACE_WITH_THE_MEASURED_KEY"
+    block "${2:-REPLACE_WITH_THE_MEASURED_KEY}" "${3:-}"
     exit 0
     ;;
   --remove)
@@ -88,12 +104,13 @@ case "${1:-}" in
     exit 0
     ;;
   "")
-    echo "usage: $0 <HYPRLAND_KEY> | --remove | --show" >&2
+    echo "usage: $0 <HYPRLAND_KEY> [RELEASE_MODIFIER] | --remove | --show" >&2
     exit 2
     ;;
 esac
 
 key="$1"
+release_modifier="${2:-}"
 if [[ "$key" == "REPLACE_WITH_THE_MEASURED_KEY" ]]; then
   echo "refusing to apply a placeholder key; measure the physical key first" >&2
   exit 2
@@ -114,12 +131,12 @@ strip_block
 {
   cat "$bindings"
   echo
-  block "$key"
+  block "$key" "$release_modifier"
 } > "$bindings.new"
 mv "$bindings.new" "$bindings"
 
 if reload_and_validate; then
-  echo "applied the Whistt binding on $key; backup at $backup"
+  echo "applied the Whistt binding on $key${release_modifier:+ (release bound as $release_modifier + $key)}; backup at $backup"
   echo "verify the shape with: linux/scripts/check-binding.sh '$key'"
 else
   echo "configuration errors after applying; restoring $backup" >&2

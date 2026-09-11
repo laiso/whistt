@@ -1,11 +1,10 @@
 -- Whistt push-to-talk binding for Omarchy / Hyprland.
 --
--- This is a template; Whistt never edits ~/.config/hypr on its own. Apply the
--- two o.bind lines below into ~/.config/hypr/bindings.lua, or use the scripts:
+-- This is a template; Whistt never edits ~/.config/hypr on its own. Apply with:
 --
---   linux/scripts/apply-binding.sh <KEY>    # applies and validates, backs up
---   linux/scripts/check-binding.sh <KEY>    # verifies the shape from hyprctl
---   linux/scripts/apply-binding.sh --remove # rolls back
+--   linux/scripts/apply-binding.sh <KEY> [RELEASE_MODIFIER]
+--   linux/scripts/check-binding.sh <KEY>
+--   linux/scripts/apply-binding.sh --remove        # rollback
 --
 -- Choosing the key requires a measurement, not a guess, because
 -- kb_options = "ctrl:nocaps" collapses several physical keys onto one keysym:
@@ -33,10 +32,19 @@
 -- stops reaching applications as Ctrl while the binding is active. Left Ctrl,
 -- Caps Lock, and the Omarchy F9 / voxtype bindings are unaffected.
 --
+-- A lone modifier key needs its own modifier named in the RELEASE bind. Hyprland
+-- resolves a key event against the modifier state from before that key's own
+-- modifier change, so while Control_R is being released Control is still
+-- depressed and a modmask-0 release bind never matches: the session then runs
+-- until the recording limit instead of stopping on release. This is what
+-- Hyprland's "binding mods" documentation means by bindr=ALT,Alt_L,...; the
+-- press bind correctly stays at modmask 0.
+--
 -- The press binding does not repeat (the default) and the release binding uses
 -- { release = true }, matching the shape of Omarchy's own F9 / voxtype pair.
 
 local whistt_key = "Control_R"
+local whistt_release_key = "CTRL + " .. whistt_key
 
 o.bind(whistt_key, "Whistt push-to-talk (start)", "whistt record start")
-o.bind(whistt_key, "Whistt push-to-talk (stop)", "whistt record stop", { release = true })
+o.bind(whistt_release_key, "Whistt push-to-talk (stop)", "whistt record stop", { release = true })
