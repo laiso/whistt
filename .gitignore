@@ -14,3 +14,7 @@ build/
 
 # Local recordings / scratch
 *.mov
+
+# Rust build cache for linux/. The daemon sandbox cannot write ~/.cargo, so
+# CARGO_HOME is pointed inside the workspace during development.
+.cargo-home/
