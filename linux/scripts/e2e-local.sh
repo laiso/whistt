@@ -27,6 +27,10 @@ repo_root="$(cd "$linux_dir/.." && pwd)"
 seconds="${WHISTT_E2E_SECONDS:-6}"
 audio_file="${WHISTT_E2E_AUDIO_FILE:-}"
 expected="${WHISTT_E2E_EXPECTED_TEXT:-}"
+# after-ready (default) plays the file once the provider session is configured;
+# immediate plays it together with `record start`, which is how a person uses
+# push-to-talk: they speak while the provider is still connecting.
+playback_mode="${WHISTT_E2E_PLAYBACK_MODE:-after-ready}"
 
 if [[ -z "${OPENAI_API_KEY:-}" && -f "$repo_root/.env" ]]; then
   set -a
@@ -119,6 +123,14 @@ fi
 
 "$binary" record start
 
+if [[ -n "$audio_file" && "$playback_mode" == "immediate" ]]; then
+  # Audio that arrives before the provider session is configured must be
+  # buffered and transcribed, not dropped.
+  pw-cat --playback --target "$sink" "$audio_file" >/dev/null 2>&1 &
+  playback_pid=$!
+  echo "playback started with the recording, before the provider was ready"
+fi
+
 for _ in $(seq 1 200); do
   grep -q "provider session ready" "$daemon_log" 2>/dev/null && break
   sleep 0.05
@@ -131,8 +143,10 @@ fi
 echo "provider session ready; recording"
 
 if [[ -n "$audio_file" ]]; then
-  pw-cat --playback --target "$sink" "$audio_file" >/dev/null 2>&1 &
-  playback_pid=$!
+  if [[ "$playback_mode" != "immediate" ]]; then
+    pw-cat --playback --target "$sink" "$audio_file" >/dev/null 2>&1 &
+    playback_pid=$!
+  fi
   for _ in $(seq 1 $((seconds * 10))); do
     kill -0 "$playback_pid" 2>/dev/null || break
     sleep 0.1

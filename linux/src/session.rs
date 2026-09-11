@@ -18,6 +18,10 @@ use crate::log;
 use crate::output::{Delivery, TextOutput, deliver};
 use crate::transport::{TranscriptEvent, TranscriptionTransport, TransportFactory};
 
+/// How many raw capture buffers get a level line. One buffer is roughly 170 ms,
+/// so this covers the first couple of seconds of a session.
+const LEVEL_SAMPLES: u32 = 12;
+
 /// A CLI command forwarded to the controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -108,13 +112,22 @@ struct Session {
     id: String,
     capture: Option<Box<dyn CaptureChild>>,
     transport: mpsc::Sender<TransportCommand>,
+    transport_task: tokio::task::JoinHandle<()>,
     ready: bool,
     capture_ended: bool,
     committed: bool,
+    first_audio_logged: bool,
+    levels_logged: u32,
     pending: VecDeque<Vec<u8>>,
     frame: Vec<u8>,
     /// Dropping this ends the per-session flush ticker.
     _ticker: oneshot::Sender<()>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.transport_task.abort();
+    }
 }
 
 impl Session {
@@ -210,7 +223,7 @@ impl Actor {
             .map_err(|error| format!("could not start microphone capture: {error}"))?;
         let transport = self.deps.transport.create();
         let (transport_sender, transport_commands) = mpsc::channel(16);
-        tokio::spawn(transport_task(
+        let transport_task = tokio::spawn(transport_task(
             id.clone(),
             transport,
             transport_commands,
@@ -235,9 +248,12 @@ impl Actor {
             id,
             capture: Some(capture.child),
             transport: transport_sender,
+            transport_task,
             ready: false,
             capture_ended: false,
             committed: false,
+            first_audio_logged: false,
+            levels_logged: 0,
             pending: VecDeque::new(),
             frame: Vec::new(),
             _ticker: ticker_stop,
@@ -256,6 +272,13 @@ impl Actor {
                     && let Some(child) = session.capture.as_mut()
                 {
                     child.request_stop();
+                }
+                if let Some(session) = &self.session {
+                    tokio::spawn(fire_after(
+                        self.deps.config.finalization_timeout,
+                        Event::FinalizationTimeout(session.id.clone()),
+                        self.events.clone(),
+                    ));
                 }
                 self.state = State::Finalizing;
                 log::info("capture stopping; waiting for the final transcript");
@@ -281,8 +304,7 @@ impl Actor {
         {
             child.kill();
             child.try_reap();
-            // Dropping the transport sender ends the writer task, which closes
-            // the socket; the reader task then finishes on its own.
+            // Session::drop aborts all network work, including queued commands.
         }
         self.state = State::Idle;
     }
@@ -294,7 +316,9 @@ impl Actor {
             log::info(reason);
             let output = self.deps.output.clone();
             let message = format!("Whistt: {reason}");
-            let _ = output.notify(&message);
+            tokio::task::spawn_blocking(move || {
+                let _ = output.notify(&message);
+            });
         }
     }
 
@@ -402,7 +426,17 @@ impl Actor {
     /// transport accepts it, and exceeding the bound aborts the session.
     async fn ingest(&mut self, bytes: Vec<u8>) {
         let mut overflow = false;
+        let mut first_audio = false;
+        let mut sample_level = None;
         if let Some(session) = self.session.as_mut() {
+            if !session.first_audio_logged {
+                session.first_audio_logged = true;
+                first_audio = true;
+            }
+            if session.levels_logged < LEVEL_SAMPLES {
+                session.levels_logged += 1;
+                sample_level = Some((session.levels_logged, pcm16_level(&bytes)));
+            }
             session.frame.extend_from_slice(&bytes);
             while session.frame.len() >= CHUNK_BYTES {
                 let chunk: Vec<u8> = session.frame.drain(..CHUNK_BYTES).collect();
@@ -417,6 +451,24 @@ impl Actor {
             ))
             .await;
             return;
+        }
+        if first_audio && let Some(session) = self.session.as_ref() {
+            // The gap between "recording" and this line is what a speaker clips
+            // if they start talking the moment the key goes down.
+            log::debug(&format!(
+                "{}: first audio byte received from the microphone",
+                session.id
+            ));
+        }
+        if let Some((index, (peak, rms))) = sample_level
+            && let Some(session) = self.session.as_ref()
+        {
+            // Levels, never audio, so a clipped onset can be told apart from a
+            // microphone that was still silent when the speaker started.
+            log::debug(&format!(
+                "{}: capture level {index} peak {peak} rms {rms}",
+                session.id
+            ));
         }
         self.pump().await;
     }
@@ -493,11 +545,6 @@ impl Actor {
             log::debug(&format!(
                 "{id}: turn committed; waiting for the final transcript"
             ));
-            tokio::spawn(fire_after(
-                self.deps.config.finalization_timeout,
-                Event::FinalizationTimeout(id),
-                self.events.clone(),
-            ));
         }
     }
 
@@ -526,14 +573,35 @@ impl Actor {
         // next session, then deliver exactly once.
         self.discard();
         let output = self.deps.output.clone();
-        match deliver(output.as_ref(), &text) {
+        tokio::task::spawn_blocking(move || match deliver(output.as_ref(), &text) {
             Delivery::Inserted => log::info("typed the transcript into the focused application"),
             Delivery::Copied { .. } => {
                 log::info("could not type the transcript; copied it to the clipboard")
             }
             Delivery::Failed { .. } => log::info("could not type or copy the transcript"),
-        }
+        });
     }
+}
+
+/// Peak and RMS of one PCM16 buffer. Used only for diagnostics: a clipped onset
+/// looks different when the microphone was still silent than when the audio
+/// really was dropped, and neither case needs audio to be logged.
+fn pcm16_level(bytes: &[u8]) -> (i32, i32) {
+    let mut peak = 0i32;
+    let mut sum = 0i64;
+    let mut count = 0i64;
+    for sample in bytes.as_chunks::<2>().0 {
+        let value = i32::from(i16::from_le_bytes(*sample));
+        peak = peak.max(value.abs());
+        sum += i64::from(value) * i64::from(value);
+        count += 1;
+    }
+    let rms = if count == 0 {
+        0
+    } else {
+        ((sum / count) as f64).sqrt() as i32
+    };
+    (peak, rms)
 }
 
 async fn fire_after(delay: Duration, event: Event, events: mpsc::Sender<Event>) {
@@ -599,7 +667,7 @@ async fn transport_task(
 
     let reader_events = events.clone();
     let reader_session = session.clone();
-    tokio::spawn(async move {
+    let read = async move {
         loop {
             match reader.next_event().await {
                 Some(TranscriptEvent::Ready) => {
@@ -643,30 +711,51 @@ async fn transport_task(
                 }
             }
         }
-    });
+    };
 
-    // The writer drains in order, so the commit can never overtake audio.
-    let mut appended_any_audio = false;
-    while let Some(command) = commands.recv().await {
-        let result = match command {
-            TransportCommand::Audio(pcm) => {
-                let result = writer.send_audio(pcm).await;
-                if result.is_ok() && !appended_any_audio {
-                    appended_any_audio = true;
-                    log::debug(&format!(
-                        "{session}: first audio append sent to the provider"
-                    ));
+    let write = async move {
+        // The writer drains in order, so the commit can never overtake audio.
+        let mut appended_any_audio = false;
+        while let Some(command) = commands.recv().await {
+            let result = match command {
+                TransportCommand::Audio(pcm) => {
+                    let result = writer.send_audio(pcm).await;
+                    if result.is_ok() && !appended_any_audio {
+                        appended_any_audio = true;
+                        log::debug(&format!(
+                            "{session}: first audio append sent to the provider"
+                        ));
+                    }
+                    result
                 }
-                result
+                TransportCommand::Commit => writer.commit().await,
+            };
+            if let Err(error) = result {
+                let _ = events
+                    .send(Event::TransportFailed(session.clone(), error))
+                    .await;
+                break;
             }
-            TransportCommand::Commit => writer.commit().await,
-        };
-        if let Err(error) = result {
-            let _ = events
-                .send(Event::TransportFailed(session.clone(), error))
-                .await;
-            break;
         }
+        writer.close().await;
+    };
+    // Both halves belong to this task. Aborting it drops network awaits and
+    // buffered commands; completion of either half also drops the other.
+    tokio::select! {
+        _ = read => {},
+        _ = write => {},
     }
-    writer.close().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pcm16_level;
+
+    #[test]
+    fn level_reports_silence_and_signal() {
+        assert_eq!(pcm16_level(&[0, 0, 0, 0]), (0, 0));
+        // 1000 and -1000 as little-endian PCM16.
+        assert_eq!(pcm16_level(&[0xE8, 0x03, 0x18, 0xFC]), (1000, 1000));
+        assert_eq!(pcm16_level(&[]), (0, 0));
+    }
 }

@@ -6,8 +6,10 @@
 //! the clipboard instead.
 
 use std::ffi::OsString;
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
 /// Delivery primitives. Faked in tests.
 pub trait TextOutput: Send + Sync {
@@ -110,61 +112,83 @@ impl TextOutput for ProcessOutput {
     fn notify(&self, message: &str) -> Result<(), String> {
         let mut spec = self.notify.clone();
         spec.args.push(OsString::from(message));
-        let status = Command::new(&spec.program)
-            .args(&spec.args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|error| {
-                format!(
-                    "could not start {}: {error}",
-                    spec.program.to_string_lossy()
-                )
-            })?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "{} exited with {status}",
-                spec.program.to_string_lossy()
-            ))
-        }
+        run_process(&spec, None, Duration::from_secs(5))
     }
 }
 
 fn run_with_stdin(spec: &CommandSpec, input: &str) -> Result<(), String> {
+    run_process(spec, Some(input), Duration::from_secs(5))
+}
+
+fn run_process(spec: &CommandSpec, input: Option<&str>, timeout: Duration) -> Result<(), String> {
     let program = spec.program.to_string_lossy().into_owned();
-    let mut child = Command::new(&spec.program)
-        .args(&spec.args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("could not start {program}: {error}"))?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    runtime.block_on(async {
+        let mut child = Command::new(&spec.program)
+            .args(&spec.args)
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| format!("could not start {program}: {error}"))?;
+        let result = tokio::time::timeout(timeout, async {
+            if let Some(input) = input {
+                let mut stdin = child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| format!("{program} did not accept stdin"))?;
+                stdin
+                    .write_all(input.as_bytes())
+                    .await
+                    .map_err(|error| format!("could not write to {program}: {error}"))?;
+                // Close stdin without appending a newline.
+            }
+            let status = child
+                .wait()
+                .await
+                .map_err(|error| format!("could not wait for {program}: {error}"))?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("{program} exited with {status}"))
+            }
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => Ok(()),
+            result => {
+                // Kill and reap on write errors as well as deadline expiry.
+                let _ = child.kill().await;
+                match result {
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(format!("{program} timed out")),
+                    Ok(Ok(())) => unreachable!(),
+                }
+            }
+        }
+    })
+}
 
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| format!("{program} did not accept stdin"))?;
-        stdin
-            .write_all(input.as_bytes())
-            .map_err(|error| format!("could not write to {program}: {error}"))?;
-        // Dropping stdin closes the pipe so the child sees end of input. No
-        // newline is appended, so the focused application never sees an Enter.
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("could not wait for {program}: {error}"))?;
-    if output.status.success() {
-        return Ok(());
+    #[test]
+    fn deadlines_cover_blocked_stdin_and_process_exit() {
+        let spec = CommandSpec::new("sleep", ["30"]);
+        for input in [None, Some("x".repeat(1_000_000))] {
+            let start = std::time::Instant::now();
+            let result = run_process(&spec, input.as_deref(), Duration::from_millis(50));
+            assert!(result.unwrap_err().contains("timed out"));
+            assert!(start.elapsed() < Duration::from_secs(2));
+        }
     }
-    let detail: String = String::from_utf8_lossy(&output.stderr)
-        .trim()
-        .chars()
-        .take(200)
-        .collect();
-    Err(format!("{program} exited with {}: {detail}", output.status))
 }

@@ -4,6 +4,8 @@
 //! responses are newline-delimited JSON, and every command is acknowledged as
 //! soon as it is accepted rather than when transcription completes.
 
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::time::Duration;
 
@@ -15,13 +17,39 @@ use crate::ipc::{Request, Response, State, decode_line, encode_line};
 use crate::log;
 use crate::session::{self, Command, ControllerDeps, ControllerHandle};
 
+/// Keeps exclusive ownership of the socket for the listener's lifetime.
+pub struct BoundListener {
+    listener: UnixListener,
+    _lock: File,
+}
+
 /// Creates the private runtime directory and binds the socket.
-pub fn bind(config: &Config) -> Result<UnixListener, String> {
+pub fn bind(config: &Config) -> Result<BoundListener, String> {
     let path = config.socket_path.clone();
     if let Some(directory) = path.parent() {
         create_private_directory(directory)?;
     }
+    // Never unlink this lock file: all contenders must lock the same inode.
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path.with_extension("lock"))
+        .map_err(|error| format!("could not open daemon lock: {error}"))?;
+    // SAFETY: the descriptor belongs to the live File retained by BoundListener.
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(format!(
+            "could not acquire daemon lock (another daemon may be running): {}",
+            std::io::Error::last_os_error()
+        ));
+    }
     if path.exists() {
+        // Also protect listeners started by older versions without a lock.
+        match std::os::unix::net::UnixStream::connect(&path) {
+            Ok(_) => return Err("another daemon is already listening".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
+            Err(error) => return Err(format!("could not check existing socket: {error}")),
+        }
         // The directory is private to this user, so a leftover socket from a
         // crashed daemon can only be ours.
         std::fs::remove_file(&path).map_err(|error| {
@@ -31,7 +59,12 @@ pub fn bind(config: &Config) -> Result<UnixListener, String> {
             )
         })?;
     }
-    UnixListener::bind(&path).map_err(|error| format!("could not bind {}: {error}", path.display()))
+    let listener = UnixListener::bind(&path)
+        .map_err(|error| format!("could not bind {}: {error}", path.display()))?;
+    Ok(BoundListener {
+        listener,
+        _lock: lock,
+    })
 }
 
 fn create_private_directory(directory: &Path) -> Result<(), String> {
@@ -47,11 +80,12 @@ fn create_private_directory(directory: &Path) -> Result<(), String> {
 }
 
 /// Serves connections until the returned task is aborted.
-pub fn spawn(listener: UnixListener, deps: ControllerDeps) -> tokio::task::JoinHandle<()> {
+pub fn spawn(listener: BoundListener, deps: ControllerDeps) -> tokio::task::JoinHandle<()> {
     let controller = session::spawn(deps);
     tokio::spawn(async move {
+        let listener = listener;
         loop {
-            match listener.accept().await {
+            match listener.listener.accept().await {
                 Ok((stream, _address)) => {
                     let controller = controller.clone();
                     tokio::spawn(handle_connection(stream, controller));
