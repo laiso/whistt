@@ -235,6 +235,7 @@ async fn audio_that_cannot_be_sent_within_the_bound_aborts_the_session() {
     wait_for_state(&harness.controller, State::Idle).await;
 
     assert!(harness.output.insert_attempts().is_empty());
+    harness.output.wait_for_notification("").await;
     let notifications = harness.output.notifications();
     assert!(
         notifications
@@ -260,6 +261,7 @@ async fn exceeding_the_recording_limit_aborts_and_reports() {
 
     wait_for_state(&harness.controller, State::Idle).await;
     assert!(harness.output.insert_attempts().is_empty());
+    harness.output.wait_for_notification("").await;
     assert!(
         harness
             .output
@@ -286,6 +288,7 @@ async fn a_provider_that_never_becomes_ready_hits_the_setup_timeout() {
     wait_for_state(&harness.controller, State::Idle).await;
 
     assert!(harness.output.insert_attempts().is_empty());
+    harness.output.wait_for_notification("").await;
     assert!(
         harness
             .output
@@ -314,6 +317,7 @@ async fn a_missing_final_transcript_hits_the_finalization_timeout() {
 
     wait_for_state(&harness.controller, State::Idle).await;
     assert!(harness.output.insert_attempts().is_empty());
+    harness.output.wait_for_notification("").await;
     assert!(
         harness
             .output
@@ -338,6 +342,7 @@ async fn a_connection_failure_aborts_without_inserting_or_replaying() {
     wait_for_state(&harness.controller, State::Idle).await;
 
     assert!(harness.output.insert_attempts().is_empty());
+    harness.output.wait_for_notification("").await;
     assert!(
         harness
             .output
@@ -373,6 +378,7 @@ async fn a_provider_error_during_recording_aborts_the_session() {
 
     wait_for_state(&harness.controller, State::Idle).await;
     assert!(harness.output.insert_attempts().is_empty());
+    harness.output.wait_for_notification("").await;
     assert!(
         harness
             .output
@@ -403,6 +409,7 @@ async fn losing_the_connection_during_finalization_aborts_instead_of_inserting()
 
     wait_for_state(&harness.controller, State::Idle).await;
     assert!(harness.output.insert_attempts().is_empty());
+    harness.output.wait_for_notification("").await;
     assert!(
         harness
             .output
@@ -537,4 +544,142 @@ async fn repeated_sessions_each_insert_once() {
     );
     assert_eq!(harness.transport.count(), 2);
     assert_eq!(harness.audio.count(), 2);
+}
+
+#[tokio::test]
+async fn release_times_out_even_when_audio_prevents_queueing_commit() {
+    let mut config = test_config();
+    config.finalization_timeout = Duration::from_millis(80);
+    let harness = harness(config);
+    harness.transport.delay_audio(Duration::from_secs(30));
+    harness.audio.script_initial(vec![chunk(1); 40]);
+    harness.controller.send(Command::Start).await;
+    let provider = harness.transport.session(0);
+    provider.push(TranscriptEvent::Ready);
+    settle().await;
+    harness.controller.send(Command::Stop).await;
+    wait_for_state(&harness.controller, State::Idle).await;
+    harness.output.wait_for_notification("").await;
+    settle().await;
+    assert_eq!(provider.commits(), 0);
+    assert!(provider.audio().is_empty());
+    assert!(
+        provider
+            .log()
+            .contains(&common::TransportLog::WriterDropped)
+    );
+    assert!(
+        provider
+            .log()
+            .contains(&common::TransportLog::ReaderDropped)
+    );
+    assert_eq!(
+        harness.controller.send(Command::Start).await.state,
+        State::Recording
+    );
+    harness.controller.send(Command::Cancel).await;
+}
+
+#[tokio::test]
+async fn cancelling_interrupts_connection_setup() {
+    let harness = harness(test_config());
+    harness.transport.delay_connect(Duration::from_secs(30));
+    harness.controller.send(Command::Start).await;
+    let provider = harness.transport.session(0);
+    settle().await;
+    harness.controller.send(Command::Cancel).await;
+    settle().await;
+    assert!(
+        provider
+            .log()
+            .contains(&common::TransportLog::TransportDropped)
+    );
+    assert!(
+        !provider
+            .log()
+            .contains(&common::TransportLog::WriterDropped)
+    );
+}
+
+#[tokio::test]
+async fn cancelling_drops_blocked_writes_and_queued_audio() {
+    let harness = harness(test_config());
+    harness.transport.delay_audio(Duration::from_millis(150));
+    harness.audio.script_initial(vec![chunk(1); 30]);
+    harness.controller.send(Command::Start).await;
+    let provider = harness.transport.session(0);
+    provider.push(TranscriptEvent::Ready);
+    settle().await;
+    harness.controller.send(Command::Stop).await;
+    harness.controller.send(Command::Cancel).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(provider.audio().is_empty());
+    assert_eq!(provider.commits(), 0);
+    assert!(
+        provider
+            .log()
+            .contains(&common::TransportLog::WriterDropped)
+    );
+    assert!(
+        provider
+            .log()
+            .contains(&common::TransportLog::ReaderDropped)
+    );
+}
+
+#[tokio::test]
+async fn slow_delivery_does_not_block_commands() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    struct SlowOutput(AtomicBool);
+    impl whistt::output::TextOutput for SlowOutput {
+        fn insert(&self, _: &str) -> Result<(), String> {
+            self.0.store(true, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(400));
+            Ok(())
+        }
+        fn copy(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn notify(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let output = Arc::new(SlowOutput(AtomicBool::new(false)));
+    let transport = common::FakeTransportPool::new();
+    let controller = whistt::session::spawn(whistt::session::ControllerDeps {
+        config: test_config(),
+        audio: Arc::new(common::FakeAudioPool::new()),
+        transport: Arc::new(transport.clone()),
+        output: output.clone(),
+    });
+    controller.send(Command::Start).await;
+    let provider = transport.session(0);
+    provider.push(TranscriptEvent::Ready);
+    controller.send(Command::Stop).await;
+    provider.wait_for_commit().await;
+    provider.push(TranscriptEvent::Final("text".into()));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !output.0.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_millis(100), async {
+        assert_eq!(controller.send(Command::Status).await.state, State::Idle);
+        assert_eq!(
+            controller.send(Command::Start).await.state,
+            State::Recording
+        );
+        assert_eq!(
+            controller.send(Command::Stop).await.state,
+            State::Finalizing
+        );
+        assert_eq!(controller.send(Command::Cancel).await.state, State::Idle);
+    })
+    .await
+    .expect("delivery blocked the controller");
 }

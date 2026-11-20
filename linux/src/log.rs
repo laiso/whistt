@@ -52,3 +52,24 @@ pub fn transcripts_enabled() -> bool {
         )
     })
 }
+
+/// Whether raw provider text events may be logged for protocol diagnosis.
+///
+/// Provider events can contain the user's transcript, so this is deliberately
+/// separate from ordinary debug logging and disabled by default.
+pub fn provider_events_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("WHISTT_LOG_PROVIDER_EVENTS").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
+/// Records one provider response only after the user explicitly opts in.
+pub fn provider_event(message: &str) {
+    if provider_events_enabled() {
+        eprintln!("whistt[provider]: {}{message}", elapsed());
+    }
+}

@@ -133,3 +133,27 @@ fn the_daemon_refuses_to_start_without_credentials() {
     assert!(stderr.contains("OPENAI_API_KEY is not set"), "{stderr}");
     let _ = std::fs::remove_dir_all(directory);
 }
+
+#[tokio::test]
+async fn a_second_daemon_cannot_replace_the_live_socket() {
+    let daemon = Daemon::start(test_config(), "duplicate").await;
+    assert_eq!(daemon.send(Request::Start).await.state, State::Recording);
+    let mut config = test_config();
+    config.socket_path = daemon.socket.clone();
+    assert!(whistt::daemon::bind(&config).is_err());
+    assert_eq!(daemon.send(Request::Status).await.state, State::Recording);
+    assert_eq!(daemon.send(Request::Cancel).await.state, State::Idle);
+}
+
+#[tokio::test]
+async fn a_stale_socket_can_be_rebound_after_ownership_is_released() {
+    let directory = temporary_directory("stale");
+    let mut config = test_config();
+    config.socket_path = directory.join("daemon.sock");
+    let first = whistt::daemon::bind(&config).unwrap();
+    assert!(whistt::daemon::bind(&config).is_err());
+    drop(first);
+    let second = whistt::daemon::bind(&config).unwrap();
+    drop(second);
+    std::fs::remove_dir_all(directory).unwrap();
+}

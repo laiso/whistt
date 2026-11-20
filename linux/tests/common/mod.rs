@@ -25,6 +25,9 @@ pub fn test_config() -> Config {
     Config {
         api_key: Some("test-key".to_string()),
         model: DEFAULT_MODEL.to_string(),
+        language: None,
+        output_mode: whistt::config::OutputMode::Paste,
+        paste_chord: "ctrl+shift+v".to_string(),
         device: None,
         socket_path: std::env::temp_dir().join("whistt-test/daemon.sock"),
         recording_limit: Duration::from_secs(2),
@@ -222,12 +225,16 @@ pub enum TransportLog {
     Audio(Vec<u8>),
     Commit,
     Close,
+    TransportDropped,
+    WriterDropped,
+    ReaderDropped,
 }
 
 #[derive(Clone, Default)]
 struct TransportSettings {
     connect_error: Option<String>,
     connect_delay: Duration,
+    audio_delay: Duration,
     finish_on_commit: bool,
 }
 
@@ -341,6 +348,10 @@ impl FakeTransportPool {
         self.settings.lock().unwrap().connect_delay = delay;
     }
 
+    pub fn delay_audio(&self, delay: Duration) {
+        self.settings.lock().unwrap().audio_delay = delay;
+    }
+
     /// End the stream as soon as the turn is committed.
     pub fn finish_on_commit(&self) {
         self.settings.lock().unwrap().finish_on_commit = true;
@@ -413,6 +424,8 @@ struct FakeWriter {
 impl TransportWriter for FakeWriter {
     fn send_audio(&mut self, pcm: Vec<u8>) -> BoxFuture<'_, Result<(), String>> {
         Box::pin(async move {
+            let delay = self.control.state.lock().unwrap().settings.audio_delay;
+            tokio::time::sleep(delay).await;
             self.control
                 .state
                 .lock()
@@ -534,6 +547,29 @@ impl FakeOutput {
         }
         panic!("timed out waiting for {count} insertion(s)");
     }
+
+    /// Waits until a notification containing `needle` is recorded. Abort
+    /// notifications are dispatched off the controller task, so a test must not
+    /// read them immediately after the state changes.
+    pub async fn wait_for_notification(&self, needle: &str) {
+        for _ in 0..1000 {
+            if self
+                .state
+                .lock()
+                .unwrap()
+                .notifications
+                .iter()
+                .any(|message| message.contains(needle))
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!(
+            "timed out waiting for a notification containing {needle:?}: {:?}",
+            self.notifications()
+        );
+    }
 }
 
 impl TextOutput for FakeOutput {
@@ -618,4 +654,37 @@ pub fn temporary_directory(name: &str) -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(&directory).expect("could not create the temporary directory");
     directory
+}
+
+impl Drop for FakeTransport {
+    fn drop(&mut self) {
+        self.control
+            .state
+            .lock()
+            .unwrap()
+            .log
+            .push(TransportLog::TransportDropped);
+    }
+}
+
+impl Drop for FakeWriter {
+    fn drop(&mut self) {
+        self.control
+            .state
+            .lock()
+            .unwrap()
+            .log
+            .push(TransportLog::WriterDropped);
+    }
+}
+
+impl Drop for FakeReader {
+    fn drop(&mut self) {
+        self.control
+            .state
+            .lock()
+            .unwrap()
+            .log
+            .push(TransportLog::ReaderDropped);
+    }
 }

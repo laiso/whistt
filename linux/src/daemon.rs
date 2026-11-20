@@ -6,7 +6,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -19,8 +19,21 @@ use crate::session::{self, Command, ControllerDeps, ControllerHandle};
 
 /// Keeps exclusive ownership of the socket for the listener's lifetime.
 pub struct BoundListener {
-    listener: UnixListener,
+    listener: Option<UnixListener>,
     _lock: File,
+    path: PathBuf,
+}
+
+impl Drop for BoundListener {
+    fn drop(&mut self) {
+        // Stop listening and remove our socket name before releasing ownership.
+        // This makes an immediate in-process restart deterministic.
+        drop(self.listener.take());
+        let _ = std::fs::remove_file(&self.path);
+        unsafe {
+            libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
 }
 
 /// Creates the private runtime directory and binds the socket.
@@ -62,8 +75,9 @@ pub fn bind(config: &Config) -> Result<BoundListener, String> {
     let listener = UnixListener::bind(&path)
         .map_err(|error| format!("could not bind {}: {error}", path.display()))?;
     Ok(BoundListener {
-        listener,
+        listener: Some(listener),
         _lock: lock,
+        path,
     })
 }
 
@@ -84,8 +98,8 @@ pub fn spawn(listener: BoundListener, deps: ControllerDeps) -> tokio::task::Join
     let controller = session::spawn(deps);
     tokio::spawn(async move {
         let listener = listener;
-        loop {
-            match listener.listener.accept().await {
+        while let Some(socket) = listener.listener.as_ref() {
+            match socket.accept().await {
                 Ok((stream, _address)) => {
                     let controller = controller.clone();
                     tokio::spawn(handle_connection(stream, controller));

@@ -117,6 +117,7 @@ struct Session {
     capture_ended: bool,
     committed: bool,
     first_audio_logged: bool,
+    captured_bytes: usize,
     levels_logged: u32,
     pending: VecDeque<Vec<u8>>,
     frame: Vec<u8>,
@@ -253,6 +254,7 @@ impl Actor {
             capture_ended: false,
             committed: false,
             first_audio_logged: false,
+            captured_bytes: 0,
             levels_logged: 0,
             pending: VecDeque::new(),
             frame: Vec::new(),
@@ -362,6 +364,10 @@ impl Actor {
                 }
                 if let Some(session) = self.session.as_mut() {
                     session.capture_ended = true;
+                    log::debug(&format!(
+                        "{}: capture ended after {} PCM bytes",
+                        session.id, session.captured_bytes
+                    ));
                 }
                 self.finish_capture().await;
             }
@@ -429,6 +435,7 @@ impl Actor {
         let mut first_audio = false;
         let mut sample_level = None;
         if let Some(session) = self.session.as_mut() {
+            session.captured_bytes += bytes.len();
             if !session.first_audio_logged {
                 session.first_audio_logged = true;
                 first_audio = true;
@@ -719,10 +726,17 @@ async fn transport_task(
     let write = async move {
         // The writer drains in order, so the commit can never overtake audio.
         let mut appended_any_audio = false;
+        let mut appended_chunks = 0usize;
+        let mut appended_bytes = 0usize;
         while let Some(command) = commands.recv().await {
             let result = match command {
                 TransportCommand::Audio(pcm) => {
+                    let bytes = pcm.len();
                     let result = writer.send_audio(pcm).await;
+                    if result.is_ok() {
+                        appended_chunks += 1;
+                        appended_bytes += bytes;
+                    }
                     if result.is_ok() && !appended_any_audio {
                         appended_any_audio = true;
                         log::debug(&format!(
@@ -731,7 +745,12 @@ async fn transport_task(
                     }
                     result
                 }
-                TransportCommand::Commit => writer.commit().await,
+                TransportCommand::Commit => {
+                    log::debug(&format!(
+                        "{session}: committing after {appended_chunks} audio chunks, {appended_bytes} PCM bytes sent"
+                    ));
+                    writer.commit().await
+                }
             };
             if let Err(error) = result {
                 let _ = events

@@ -97,9 +97,11 @@ async fn run_daemon(config: Config) -> Result<(), String> {
     let listener = daemon::bind(&config)?;
     log::info(&format!("listening on {}", socket_path.display()));
     log::info(&format!(
-        "model {}; capture through pw-record; text through wtype",
-        config.model
+        "model {}; output {:?}; capture through pw-record",
+        config.model, config.output_mode
     ));
+
+    let output = ProcessOutput::system(config.output_mode, &config.paste_chord)?;
 
     let deps = ControllerDeps {
         audio: Arc::new(PwRecordFactory {
@@ -108,8 +110,9 @@ async fn run_daemon(config: Config) -> Result<(), String> {
         transport: Arc::new(OpenAiTransportFactory {
             api_key,
             model: config.model.clone(),
+            language: config.language.clone(),
         }),
-        output: Arc::new(ProcessOutput::system()),
+        output: Arc::new(output),
         config,
     };
     let server = daemon::spawn(listener, deps);

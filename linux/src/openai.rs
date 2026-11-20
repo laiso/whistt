@@ -31,6 +31,7 @@ const REALTIME_URL: &str = "wss://api.openai.com/v1/realtime?intent=transcriptio
 pub struct OpenAiTransportFactory {
     pub api_key: String,
     pub model: String,
+    pub language: Option<String>,
 }
 
 impl TransportFactory for OpenAiTransportFactory {
@@ -38,6 +39,7 @@ impl TransportFactory for OpenAiTransportFactory {
         Box::new(OpenAiTransport {
             api_key: self.api_key.clone(),
             model: self.model.clone(),
+            language: self.language.clone(),
             socket: None,
         })
     }
@@ -46,6 +48,7 @@ impl TransportFactory for OpenAiTransportFactory {
 struct OpenAiTransport {
     api_key: String,
     model: String,
+    language: Option<String>,
     socket: Option<Socket>,
 }
 
@@ -64,7 +67,7 @@ impl TranscriptionTransport for OpenAiTransport {
             })?;
             self.socket = Some(socket);
 
-            let update = session_update(&self.model);
+            let update = session_update(&self.model, self.language.as_deref());
             let socket = self
                 .socket
                 .as_mut()
@@ -132,6 +135,7 @@ impl TransportReader for OpenAiReader {
             loop {
                 match self.stream.next().await {
                     Some(Ok(Message::Text(text))) => {
+                        log::provider_event(text.as_str());
                         if let Some(event) = decode_event(text.as_str()) {
                             return Some(event);
                         }
@@ -151,7 +155,7 @@ impl TransportReader for OpenAiReader {
 
 /// The transcription session configuration, matching the macOS payload,
 /// including `turn_detection: null` for manual commit.
-fn session_update(model: &str) -> String {
+fn session_update(model: &str, language: Option<&str>) -> String {
     serde_json::json!({
         "type": "session.update",
         "session": {
@@ -159,7 +163,7 @@ fn session_update(model: &str) -> String {
             "audio": {
                 "input": {
                     "format": { "type": "audio/pcm", "rate": SAMPLE_RATE },
-                    "transcription": { "model": model },
+                    "transcription": { "model": model, "language": language },
                     "turn_detection": serde_json::Value::Null,
                 }
             }
@@ -242,7 +246,7 @@ mod tests {
     #[test]
     fn session_update_matches_the_macos_payload() {
         let update: serde_json::Value =
-            serde_json::from_str(&session_update("gpt-transcribe")).unwrap();
+            serde_json::from_str(&session_update("gpt-transcribe", None)).unwrap();
         assert_eq!(update["type"], "session.update");
         assert_eq!(update["session"]["type"], "transcription");
         assert_eq!(
@@ -257,7 +261,18 @@ mod tests {
             update["session"]["audio"]["input"]["transcription"]["model"],
             "gpt-transcribe"
         );
+        assert!(update["session"]["audio"]["input"]["transcription"]["language"].is_null());
         assert!(update["session"]["audio"]["input"]["turn_detection"].is_null());
+    }
+
+    #[test]
+    fn session_update_includes_an_explicit_language_hint() {
+        let update: serde_json::Value =
+            serde_json::from_str(&session_update("gpt-transcribe", Some("ja"))).unwrap();
+        assert_eq!(
+            update["session"]["audio"]["input"]["transcription"]["language"],
+            "ja"
+        );
     }
 
     #[test]
