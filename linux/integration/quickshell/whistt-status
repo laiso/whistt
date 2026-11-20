@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# whistt-status - report the Whistt daemon state for the Omarchy shell bar.
+#
+# Prints one Waybar-style JSON line, the format the shell's command bar
+# modules parse: {"text": ..., "tooltip": ..., "class": ...}. The class
+# "active" renders the label in the bar's urgent color. The glyphs are the
+# microphone icons the shell's own microphone widget uses.
+#
+# Installed copy: ~/.config/omarchy/bar/scripts/whistt-status
+# Bar module entry: see module.json in this directory.
+
+set -u
+
+whistt_bin=$(command -v whistt || true)
+if [[ -z $whistt_bin && -x $HOME/.local/bin/whistt ]]; then
+  whistt_bin=$HOME/.local/bin/whistt
+fi
+
+state=""
+if [[ -n $whistt_bin ]]; then
+  state=$("$whistt_bin" status 2>/dev/null || true)
+fi
+
+case $state in
+  recording)
+    printf '{"text":"󰍬","tooltip":"Whistt: recording","class":"active"}\n'
+    ;;
+  finalizing)
+    printf '{"text":"󰍬","tooltip":"Whistt: transcribing","class":"active"}\n'
+    ;;
+  idle)
+    printf '{"text":"󰍬","tooltip":"Whistt: idle","class":""}\n'
+    ;;
+  *)
+    printf '{"text":"󰍭","tooltip":"Whistt: not running","class":""}\n'
+    ;;
+esac

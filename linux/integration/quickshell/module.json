@@ -1,0 +1,7 @@
+{
+  "id": "whistt",
+  "type": "command",
+  "exec": "~/.config/omarchy/bar/scripts/whistt-status",
+  "interval": 1,
+  "tooltip": "Whistt"
+}
