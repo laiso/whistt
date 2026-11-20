@@ -276,6 +276,20 @@ mod tests {
     }
 
     #[test]
+    fn session_update_encodes_the_live_transcribe_model() {
+        let update: serde_json::Value =
+            serde_json::from_str(&session_update("gpt-live-transcribe", Some("ja"))).unwrap();
+        assert_eq!(
+            update["session"]["audio"]["input"]["transcription"]["model"],
+            "gpt-live-transcribe"
+        );
+        assert_eq!(
+            update["session"]["audio"]["input"]["transcription"]["language"],
+            "ja"
+        );
+    }
+
+    #[test]
     fn only_session_updated_marks_the_session_ready() {
         assert_eq!(
             decode_event(r#"{"type":"session.updated"}"#),

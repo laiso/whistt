@@ -10,6 +10,22 @@ use std::time::Duration;
 /// Default OpenAI transcription model; matches the macOS application default.
 pub const DEFAULT_MODEL: &str = "gpt-transcribe";
 
+/// OpenAI transcription models supported on Linux: the OpenAI group of the
+/// macOS `TranscriptionModelCatalog` (see `docs/specs/transcription-models.md`).
+/// Both commit the recorded audio when the push-to-talk turn ends and deliver
+/// one final transcript through the same output path.
+pub const SUPPORTED_MODELS: [&str; 2] = ["gpt-transcribe", "gpt-live-transcribe"];
+
+/// Resolves an environment-provided model the way the macOS catalog resolves
+/// a saved one: a supported model is kept, and anything else — including a
+/// stale value such as `gpt-realtime-whisper` — falls back to the default.
+pub fn resolve_model(preferred: Option<String>) -> String {
+    match preferred {
+        Some(model) if SUPPORTED_MODELS.contains(&model.as_str()) => model,
+        _ => DEFAULT_MODEL.to_string(),
+    }
+}
+
 /// Capture format the OpenAI transcription session expects.
 pub const SAMPLE_RATE: u32 = 24_000;
 pub const CHANNELS: u16 = 1;
@@ -74,8 +90,7 @@ impl Config {
     pub fn from_env() -> Result<Self, String> {
         Ok(Self {
             api_key: non_empty(std::env::var("OPENAI_API_KEY").ok()),
-            model: non_empty(std::env::var("WHISTT_MODEL").ok())
-                .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            model: resolve_model(non_empty(std::env::var("WHISTT_MODEL").ok())),
             language: non_empty(std::env::var("WHISTT_LANGUAGE").ok()),
             output_mode: std::env::var("WHISTT_OUTPUT")
                 .unwrap_or_else(|_| "paste".to_string())
@@ -135,6 +150,28 @@ mod tests {
             max_unsent_audio: Duration::from_secs(5),
         };
         assert_eq!(config.max_unsent_bytes(), 240_000);
+    }
+
+    #[test]
+    fn supported_models_resolve_to_themselves() {
+        assert_eq!(
+            resolve_model(Some("gpt-transcribe".to_string())),
+            "gpt-transcribe"
+        );
+        assert_eq!(
+            resolve_model(Some("gpt-live-transcribe".to_string())),
+            "gpt-live-transcribe"
+        );
+    }
+
+    #[test]
+    fn unsupported_models_fall_back_to_the_default() {
+        assert_eq!(resolve_model(None), DEFAULT_MODEL);
+        assert_eq!(
+            resolve_model(Some("gpt-realtime-whisper".to_string())),
+            DEFAULT_MODEL
+        );
+        assert_eq!(resolve_model(Some("whisper-1".to_string())), DEFAULT_MODEL);
     }
 
     #[test]
