@@ -136,20 +136,20 @@ impl AudioCapture for PwRecordCapture {
 
         Ok(CaptureSession {
             chunks: receiver,
-            child: Box::new(PwRecordChild { child }),
+            child: Box::new(PwRecordChild { child: Some(child) }),
         })
     }
 }
 
 struct PwRecordChild {
-    child: tokio::process::Child,
+    child: Option<tokio::process::Child>,
 }
 
 impl CaptureChild for PwRecordChild {
     fn request_stop(&mut self) {
         // SIGTERM lets pw-record flush and exit cleanly; the reader then drains
         // whatever is still buffered in the pipe. SIGKILL would drop audio.
-        if let Some(pid) = self.child.id() {
+        if let Some(pid) = self.child.as_ref().and_then(tokio::process::Child::id) {
             unsafe {
                 libc::kill(pid as libc::pid_t, libc::SIGTERM);
             }
@@ -157,11 +157,34 @@ impl CaptureChild for PwRecordChild {
     }
 
     fn kill(&mut self) {
-        let _ = self.child.start_kill();
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.start_kill();
+        }
     }
 
     fn try_reap(&mut self) {
-        let _ = self.child.try_wait();
+        if let Some(child) = self.child.as_mut()
+            && child.try_wait().ok().flatten().is_some()
+        {
+            self.child = None;
+        }
+    }
+}
+
+impl Drop for PwRecordChild {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        let _ = child.start_kill();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = child.wait().await;
+            });
+        }
     }
 }
 

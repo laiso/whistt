@@ -115,6 +115,25 @@ if [[ "$key" == "REPLACE_WITH_THE_MEASURED_KEY" ]]; then
   echo "refusing to apply a placeholder key; measure the physical key first" >&2
   exit 2
 fi
+if [[ ! "$key" =~ ^[A-Za-z0-9_:]+$ ]]; then
+  echo "refusing to apply invalid key name: $key" >&2
+  exit 2
+fi
+if [[ -n "$release_modifier" && ! "$release_modifier" =~ ^[A-Za-z0-9_+[:space:]]+$ ]]; then
+  echo "refusing to apply invalid release modifier: $release_modifier" >&2
+  exit 2
+fi
+if [[ -z "$release_modifier" && "$key" =~ ^(Control|Alt|Shift|Super|Meta|Hyper)_[LR]$ ]]; then
+  suggested="MODIFIER"
+  case "$key" in
+    Control_*) suggested="CTRL" ;;
+    Alt_*) suggested="ALT" ;;
+    Shift_*) suggested="SHIFT" ;;
+    Super_*) suggested="SUPER" ;;
+  esac
+  echo "refusing to bind modifier key $key without RELEASE_MODIFIER (for example: $0 $key $suggested)" >&2
+  exit 2
+fi
 
 if ! command -v whistt >/dev/null; then
   echo "warning: 'whistt' is not on PATH, so the binding would do nothing." >&2

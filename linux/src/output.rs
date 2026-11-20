@@ -2,6 +2,7 @@
 
 use std::ffi::OsString;
 use std::process::Stdio;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -85,6 +86,8 @@ pub struct ProcessOutput {
     pub clear: CommandSpec,
     pub clear_primary: CommandSpec,
     pub notify: CommandSpec,
+    pub restore_delay: Duration,
+    pub paste_lock: Mutex<()>,
 }
 
 impl ProcessOutput {
@@ -102,10 +105,19 @@ impl ProcessOutput {
             clear: CommandSpec::new("wl-copy", ["--clear"]),
             clear_primary: CommandSpec::new("wl-copy", ["--primary", "--clear"]),
             notify: CommandSpec::new("hyprctl", ["notify", "-1", "5000", "0"]),
+            restore_delay: RESTORE_DELAY,
+            paste_lock: Mutex::new(()),
         })
     }
 
     fn paste_and_restore(&self, text: &str) -> Result<(), String> {
+        // Serialize paste+restore turns so a fast follow-up session never
+        // snapshots the previous session's transient transcript before its
+        // delayed restore runs.
+        let _guard = self
+            .paste_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let clipboard_snapshot = snapshot_selection(&self.paste_types, &self.paste_read)?;
         let primary_snapshot =
             snapshot_selection(&self.paste_types_primary, &self.paste_read_primary)?;
@@ -116,6 +128,7 @@ impl ProcessOutput {
             // before reporting the failure.
             let _ = restore_selection(
                 &self.copy,
+                &self.paste_types,
                 &self.paste_read,
                 &self.clear,
                 text,
@@ -124,21 +137,36 @@ impl ProcessOutput {
             return Err(error);
         }
         let paste_result = run_process(&self.paste, None, PROCESS_TIMEOUT);
-        std::thread::sleep(RESTORE_DELAY);
-        restore_selection(
+        if paste_result.is_ok() {
+            std::thread::sleep(self.restore_delay);
+        }
+        let clipboard_restore = restore_selection(
             &self.copy,
+            &self.paste_types,
             &self.paste_read,
             &self.clear,
             text,
             clipboard_snapshot,
-        )?;
-        restore_selection(
+        );
+        let primary_restore = restore_selection(
             &self.copy_primary,
+            &self.paste_types_primary,
             &self.paste_read_primary,
             &self.clear_primary,
             text,
             primary_snapshot,
-        )?;
+        );
+        if paste_result.is_ok() {
+            // Once the paste keystroke has been delivered, a best-effort
+            // restore error must not report insertion failure (which would
+            // trigger fallback clipboard overwrite and a false error banner).
+            if let Err(error) = clipboard_restore {
+                crate::log::info(&format!("could not restore clipboard selection: {error}"));
+            }
+            if let Err(error) = primary_restore {
+                crate::log::info(&format!("could not restore primary selection: {error}"));
+            }
+        }
         paste_result
     }
 }
@@ -162,19 +190,34 @@ impl TextOutput for ProcessOutput {
     }
 }
 
+const MAX_TYPES_BYTES: usize = 64 * 1024;
+
 enum ClipboardSnapshot {
     Empty,
+    SkipRestore,
     Data { mime: String, bytes: Vec<u8> },
+}
+
+enum CapturedOutput {
+    Bytes(Vec<u8>),
+    TooLarge,
 }
 
 /// Captures one selection's current contents so a paste can put them back.
 /// A selection with no owner, or with no usable type, snapshots as empty.
+/// Items larger than [`MAX_SNAPSHOT_BYTES`] skip snapshotting rather than
+/// aborting insertion (which would fall back to `wl-copy` and overwrite the
+/// large item anyway).
 fn snapshot_selection(
     types: &CommandSpec,
     read: &CommandSpec,
 ) -> Result<ClipboardSnapshot, String> {
-    let types = match run_capture(types, PROCESS_TIMEOUT) {
-        Ok(types) => types,
+    let types = match run_capture_bounded(types, PROCESS_TIMEOUT, MAX_TYPES_BYTES) {
+        Ok(CapturedOutput::Bytes(types)) => types,
+        Ok(CapturedOutput::TooLarge) => {
+            crate::log::info("clipboard type list is too large; skipping restore");
+            return Ok(ClipboardSnapshot::SkipRestore);
+        }
         Err(error) if error.contains(" exited with ") => return Ok(ClipboardSnapshot::Empty),
         Err(error) => return Err(error),
     };
@@ -185,32 +228,61 @@ fn snapshot_selection(
     let mut read = read.clone();
     read.args
         .extend([OsString::from("--type"), OsString::from(&mime)]);
-    let bytes = run_capture(&read, PROCESS_TIMEOUT)?;
-    if bytes.len() > MAX_SNAPSHOT_BYTES {
-        return Err(format!(
-            "clipboard item is too large to restore safely ({} bytes)",
-            bytes.len()
-        ));
+    match run_capture_bounded(&read, PROCESS_TIMEOUT, MAX_SNAPSHOT_BYTES) {
+        Ok(CapturedOutput::Bytes(bytes)) => Ok(ClipboardSnapshot::Data { mime, bytes }),
+        Ok(CapturedOutput::TooLarge) => {
+            crate::log::info(&format!(
+                "clipboard item exceeds {MAX_SNAPSHOT_BYTES} bytes; skipping restore"
+            ));
+            Ok(ClipboardSnapshot::SkipRestore)
+        }
+        // Selection cleared between `--list-types` and reading its payload.
+        Err(error) if error.contains(" exited with ") => Ok(ClipboardSnapshot::Empty),
+        Err(error) => Err(error),
     }
-    Ok(ClipboardSnapshot::Data { mime, bytes })
 }
 
 /// Restores one selection's snapshot, but only when the selection still
-/// holds exactly the transcript Whistt published: a newer user copy is
-/// never overwritten.
+/// offers text and holds the exact bytes Whistt published: a newer user or
+/// application copy (including clearing the clipboard or copying an image) is
+/// never overwritten and never treated as an error.
 fn restore_selection(
     copy: &CommandSpec,
+    types: &CommandSpec,
     read: &CommandSpec,
     clear: &CommandSpec,
     transcript: &str,
     snapshot: ClipboardSnapshot,
 ) -> Result<(), String> {
-    let current = run_capture(read, PROCESS_TIMEOUT)?;
+    let offered = match run_capture_bounded(types, PROCESS_TIMEOUT, MAX_TYPES_BYTES) {
+        Ok(CapturedOutput::Bytes(bytes)) => bytes,
+        Ok(CapturedOutput::TooLarge) => return Ok(()),
+        // Selection was cleared while waiting to restore; leave it cleared.
+        Err(error) if error.contains(" exited with ") => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let offered = String::from_utf8_lossy(&offered);
+    let Some(text_mime) = preferred_text_mime(offered.lines()) else {
+        // Another application replaced the selection with non-text content
+        // (such as `image/png`); leave the new selection untouched.
+        return Ok(());
+    };
+    let mut read = read.clone();
+    read.args
+        .extend([OsString::from("--type"), OsString::from(text_mime)]);
+    let current = match run_capture_bounded(&read, PROCESS_TIMEOUT, transcript.len()) {
+        Ok(CapturedOutput::Bytes(bytes)) => bytes,
+        Ok(CapturedOutput::TooLarge) => return Ok(()),
+        Err(error) if error.contains(" exited with ") => return Ok(()),
+        Err(error) => return Err(error),
+    };
     if current != transcript.as_bytes() {
         return Ok(());
     }
     match snapshot {
-        ClipboardSnapshot::Empty => run_process(clear, None, PROCESS_TIMEOUT),
+        ClipboardSnapshot::Empty | ClipboardSnapshot::SkipRestore => {
+            run_process(clear, None, PROCESS_TIMEOUT)
+        }
         ClipboardSnapshot::Data { mime, bytes } => {
             let mut restore = copy.clone();
             restore
@@ -221,12 +293,32 @@ fn restore_selection(
     }
 }
 
-fn preferred_mime<'a>(types: impl Iterator<Item = &'a str>) -> Option<String> {
-    let types: Vec<&str> = types.filter(|value| !value.is_empty()).collect();
-    for preferred in ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"] {
+fn preferred_text_mime<'a>(types: impl Iterator<Item = &'a str>) -> Option<String> {
+    let types: Vec<&str> = types
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect();
+    for preferred in [
+        "text/plain;charset=utf-8",
+        "UTF8_STRING",
+        "text/plain",
+        "STRING",
+        "TEXT",
+    ] {
         if types.contains(&preferred) {
             return Some(preferred.to_string());
         }
+    }
+    None
+}
+
+fn preferred_mime<'a>(types: impl Iterator<Item = &'a str>) -> Option<String> {
+    let types: Vec<&str> = types
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect();
+    if let Some(text_mime) = preferred_text_mime(types.iter().copied()) {
+        return Some(text_mime);
     }
     types.first().map(|value| (*value).to_string())
 }
@@ -354,7 +446,11 @@ fn run_process(spec: &CommandSpec, input: Option<&[u8]>, timeout: Duration) -> R
     })
 }
 
-fn run_capture(spec: &CommandSpec, timeout: Duration) -> Result<Vec<u8>, String> {
+fn run_capture_bounded(
+    spec: &CommandSpec,
+    timeout: Duration,
+    max_bytes: usize,
+) -> Result<CapturedOutput, String> {
     let program = spec.program.to_string_lossy().into_owned();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -373,25 +469,38 @@ fn run_capture(spec: &CommandSpec, timeout: Duration) -> Result<Vec<u8>, String>
             .stdout
             .take()
             .ok_or_else(|| format!("{program} stdout was not captured"))?;
+        let limit = (max_bytes as u64).saturating_add(1);
         let result = tokio::time::timeout(timeout, async {
             let mut bytes = Vec::new();
-            stdout
+            (&mut stdout)
+                .take(limit)
                 .read_to_end(&mut bytes)
                 .await
                 .map_err(|error| format!("could not read {program}: {error}"))?;
+            if bytes.len() > max_bytes {
+                return Ok(CapturedOutput::TooLarge);
+            }
             let status = child
                 .wait()
                 .await
                 .map_err(|error| format!("could not wait for {program}: {error}"))?;
             if status.success() {
-                Ok(bytes)
+                Ok(CapturedOutput::Bytes(bytes))
             } else {
                 Err(format!("{program} exited with {status}"))
             }
         })
         .await;
         match result {
-            Ok(result) => result,
+            Ok(Ok(CapturedOutput::Bytes(bytes))) => Ok(CapturedOutput::Bytes(bytes)),
+            Ok(Ok(CapturedOutput::TooLarge)) => {
+                let _ = child.kill().await;
+                Ok(CapturedOutput::TooLarge)
+            }
+            Ok(Err(error)) => {
+                let _ = child.kill().await;
+                Err(error)
+            }
             Err(_) => {
                 let _ = child.kill().await;
                 Err(format!("{program} timed out"))

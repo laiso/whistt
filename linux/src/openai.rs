@@ -158,9 +158,9 @@ impl TransportReader for OpenAiReader {
 /// `language` is omitted entirely when unset: the transcription API rejects
 /// an explicit null for it.
 fn session_update(model: &str, language: Option<&str>) -> String {
-    let mut transcription = serde_json::json!({ "model": model });
-    if let Some(language) = language {
-        transcription["language"] = language.into();
+    let mut transcription = serde_json::json!({ "model": model.trim() });
+    if let Some(language) = language.map(str::trim).filter(|value| !value.is_empty()) {
+        transcription["language"] = language.to_ascii_lowercase().into();
     }
     serde_json::json!({
         "type": "session.update",
@@ -235,12 +235,23 @@ fn text_field(value: &serde_json::Value) -> String {
 }
 
 fn error_message(value: &serde_json::Value) -> String {
-    match value
-        .get("error")
-        .and_then(|error| error.get("message"))
-        .and_then(|message| message.as_str())
-    {
-        Some(message) => message.to_string(),
+    let error = value.get("error");
+    let message = error
+        .and_then(|err| err.get("message"))
+        .and_then(|msg| msg.as_str())
+        .or_else(|| value.get("message").and_then(|msg| msg.as_str()))
+        .map(str::trim)
+        .filter(|msg| !msg.is_empty());
+    if let Some(message) = message {
+        return message.to_string();
+    }
+    let code = error
+        .and_then(|err| err.get("code").or_else(|| err.get("type")))
+        .and_then(|code| code.as_str())
+        .map(str::trim)
+        .filter(|code| !code.is_empty());
+    match code {
+        Some(code) => format!("provider error ({code})"),
         None => "the provider reported an error without a message".to_string(),
     }
 }
@@ -312,6 +323,21 @@ mod tests {
                 .get("language")
                 .is_none()
         );
+
+        let blank_lang: serde_json::Value =
+            serde_json::from_str(&session_update("gpt-live-transcribe", Some("   "))).unwrap();
+        assert!(
+            blank_lang["session"]["audio"]["input"]["transcription"]
+                .get("language")
+                .is_none()
+        );
+
+        let upper_lang: serde_json::Value =
+            serde_json::from_str(&session_update("gpt-live-transcribe", Some(" JA "))).unwrap();
+        assert_eq!(
+            upper_lang["session"]["audio"]["input"]["transcription"]["language"],
+            "ja"
+        );
     }
 
     #[test]
@@ -360,6 +386,20 @@ mod tests {
         assert_eq!(
             decode_event(r#"{"type":"error","error":{"message":"Invalid API key"}}"#),
             Some(TranscriptEvent::Failed("Invalid API key".to_string()))
+        );
+        assert_eq!(
+            decode_event(r#"{"type":"error","error":{"message":"   ","code":"invalid_model"}}"#),
+            Some(TranscriptEvent::Failed(
+                "provider error (invalid_model)".to_string()
+            ))
+        );
+        assert_eq!(
+            decode_event(
+                r#"{"type":"conversation.item.input_audio_transcription.failed","error":{"message":""}}"#
+            ),
+            Some(TranscriptEvent::Failed(
+                "the provider reported an error without a message".to_string()
+            ))
         );
         assert_eq!(decode_event("not json"), None);
         assert_eq!(decode_event(r#"{"no":"type"}"#), None);

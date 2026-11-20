@@ -103,18 +103,53 @@ then
 fi
 
 # 3. Caps Lock must not be latched on any keyboard.
-caps="$(hyprctl devices | grep -i capslock | awk '{print $2}' | sort -u | tr '\n' ' ')"
-if [[ "$caps" == "no " ]]; then
-  note "keyboard capsLock" "all 'no'"
-else
-  note "keyboard capsLock" "UNEXPECTED: $caps"
+if ! python3 - <<'PY'
+import json
+import subprocess
+import sys
+
+try:
+    devices = json.loads(subprocess.check_output(["hyprctl", "devices", "-j"]))
+except Exception as error:  # noqa: BLE001
+    print(f"{'keyboard capsLock':46} FAIL")
+    print(f"  - could not read devices: {error}")
+    sys.exit(1)
+
+keyboards = devices.get("keyboards") or []
+latched = [kb.get("name", "(unnamed)") for kb in keyboards if kb.get("capsLock")]
+if latched:
+    print(f"{'keyboard capsLock':46} UNEXPECTED: {', '.join(latched)}")
+    sys.exit(1)
+print(f"{'keyboard capsLock':46} all 'no'")
+PY
+then
   fail=1
 fi
 
 # 4. The daemon, if running, must answer.
-if [[ -S "${XDG_RUNTIME_DIR:-/nonexistent}/whistt/daemon.sock" ]]; then
-  status="$(whistt status 2>&1 || true)"
-  note "whistt status" "${status:-no output}"
+socket_path="${XDG_RUNTIME_DIR:-/nonexistent}/whistt/daemon.sock"
+if [[ -S "$socket_path" ]]; then
+  whistt_bin="$(command -v whistt || true)"
+  if [[ -z "$whistt_bin" && -n "${HOME:-}" && -x "$HOME/.local/bin/whistt" ]]; then
+    whistt_bin="$HOME/.local/bin/whistt"
+  elif [[ -z "$whistt_bin" && -n "${HOME:-}" && -x "$HOME/.cargo/bin/whistt" ]]; then
+    whistt_bin="$HOME/.cargo/bin/whistt"
+  fi
+  if [[ -z "$whistt_bin" ]]; then
+    note "whistt status" "FAIL ('whistt' binary not found while $socket_path exists)"
+    fail=1
+  else
+    status_cmd=("$whistt_bin" status)
+    if command -v timeout >/dev/null 2>&1; then
+      status_cmd=(timeout 2s "$whistt_bin" status)
+    fi
+    if status="$("${status_cmd[@]}" 2>&1)"; then
+      note "whistt status" "${status:-no output}"
+    else
+      note "whistt status" "FAIL (${status:-no output})"
+      fail=1
+    fi
+  fi
 else
   note "whistt daemon" "not running (start it with 'whistt daemon')"
 fi

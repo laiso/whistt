@@ -233,6 +233,7 @@ pub enum TransportLog {
 #[derive(Clone, Default)]
 struct TransportSettings {
     connect_error: Option<String>,
+    send_audio_error: Option<String>,
     connect_delay: Duration,
     audio_delay: Duration,
     finish_on_commit: bool,
@@ -343,6 +344,11 @@ impl FakeTransportPool {
         self.settings.lock().unwrap().connect_error = Some(message.to_string());
     }
 
+    /// Make `send_audio` fail on the next created session.
+    pub fn fail_send_audio(&self, message: &str) {
+        self.settings.lock().unwrap().send_audio_error = Some(message.to_string());
+    }
+
     /// Make the next created session take time to become ready.
     pub fn delay_connect(&self, delay: Duration) {
         self.settings.lock().unwrap().connect_delay = delay;
@@ -424,8 +430,17 @@ struct FakeWriter {
 impl TransportWriter for FakeWriter {
     fn send_audio(&mut self, pcm: Vec<u8>) -> BoxFuture<'_, Result<(), String>> {
         Box::pin(async move {
-            let delay = self.control.state.lock().unwrap().settings.audio_delay;
+            let (delay, error) = {
+                let state = self.control.state.lock().unwrap();
+                (
+                    state.settings.audio_delay,
+                    state.settings.send_audio_error.clone(),
+                )
+            };
             tokio::time::sleep(delay).await;
+            if let Some(message) = error {
+                return Err(message);
+            }
             self.control
                 .state
                 .lock()

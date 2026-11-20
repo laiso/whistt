@@ -20,8 +20,8 @@ pub const SUPPORTED_MODELS: [&str; 2] = ["gpt-transcribe", "gpt-live-transcribe"
 /// a saved one: a supported model is kept, and anything else — including a
 /// stale value such as `gpt-realtime-whisper` — falls back to the default.
 pub fn resolve_model(preferred: Option<String>) -> String {
-    match preferred {
-        Some(model) if SUPPORTED_MODELS.contains(&model.as_str()) => model,
+    match preferred.as_deref().map(str::trim) {
+        Some(model) if SUPPORTED_MODELS.contains(&model) => model.to_string(),
         _ => DEFAULT_MODEL.to_string(),
     }
 }
@@ -91,7 +91,7 @@ impl Config {
         Ok(Self {
             api_key: non_empty(std::env::var("OPENAI_API_KEY").ok()),
             model: resolve_model(non_empty(std::env::var("WHISTT_MODEL").ok())),
-            language: non_empty(std::env::var("WHISTT_LANGUAGE").ok()),
+            language: normalize_language(std::env::var("WHISTT_LANGUAGE").ok()),
             output_mode: std::env::var("WHISTT_OUTPUT")
                 .unwrap_or_else(|_| "paste".to_string())
                 .parse()?,
@@ -121,7 +121,13 @@ pub fn default_socket_path() -> Result<PathBuf, String> {
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
-    value.filter(|value| !value.trim().is_empty())
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalize_language(value: Option<String>) -> Option<String> {
+    non_empty(value).map(|language| language.to_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -179,5 +185,23 @@ mod tests {
         assert_eq!("type".parse(), Ok(OutputMode::Type));
         assert_eq!("PASTE".parse(), Ok(OutputMode::Paste));
         assert!("clipboard".parse::<OutputMode>().is_err());
+    }
+
+    #[test]
+    fn env_helpers_trim_whitespace_and_normalize_language() {
+        assert_eq!(
+            non_empty(Some("  sk-test \r\n".to_string())),
+            Some("sk-test".to_string())
+        );
+        assert_eq!(non_empty(Some("   \n".to_string())), None);
+        assert_eq!(
+            resolve_model(Some("  gpt-live-transcribe \n".to_string())),
+            "gpt-live-transcribe"
+        );
+        assert_eq!(
+            normalize_language(Some("  JA \n".to_string())),
+            Some("ja".to_string())
+        );
+        assert_eq!(normalize_language(Some("   ".to_string())), None);
     }
 }

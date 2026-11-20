@@ -13,7 +13,8 @@ The module polls `whistt status` once a second and renders:
 | `idle` | microphone icon, normal color | `Whistt: idle` |
 | `recording` | filled circle + microphone icon, normal color | `Whistt: recording` |
 | `finalizing` | filled circle + microphone icon, normal color | `Whistt: transcribing` |
-| unreachable | microphone-off icon, urgent color | `Whistt: not running` |
+| unreachable / timed out | microphone-off icon, urgent color | `Whistt: not running` |
+| script missing / failed to launch | microphone-off icon, normal color | `Whistt: status unavailable` |
 
 The icons are the same glyphs as the shell's built-in microphone widget.
 The shell's command modules offer only two colors -- normal and the

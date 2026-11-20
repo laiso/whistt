@@ -14,27 +14,51 @@
 
 set -u
 
+emitted=0
+emit_not_running() {
+  if (( ! emitted )); then
+    emitted=1
+    printf '{"text":"󰍭","tooltip":"Whistt: not running","class":"active"}\n'
+  fi
+}
+trap emit_not_running EXIT
+
 whistt_bin=$(command -v whistt || true)
-if [[ -z $whistt_bin && -x $HOME/.local/bin/whistt ]]; then
+if [[ -z $whistt_bin && -n ${HOME:-} && -x $HOME/.local/bin/whistt ]]; then
   whistt_bin=$HOME/.local/bin/whistt
+elif [[ -z $whistt_bin && -n ${HOME:-} && -x $HOME/.cargo/bin/whistt ]]; then
+  whistt_bin=$HOME/.cargo/bin/whistt
 fi
 
 state=""
 if [[ -n $whistt_bin ]]; then
-  state=$("$whistt_bin" status 2>/dev/null || true)
+  # Bound each poll below the 1-second bar interval: CustomCommandModule skips
+  # new ticks while the previous child is still running, so a hung socket
+  # without a timeout would freeze the bar on stale state.
+  if command -v timeout >/dev/null 2>&1; then
+    state=$(timeout 0.8s "$whistt_bin" status 2>/dev/null || true)
+  else
+    state=$("$whistt_bin" status 2>/dev/null || true)
+  fi
 fi
+
+state=${state#"${state%%[![:space:]]*}"}
+state=${state%"${state##*[![:space:]]}"}
 
 case $state in
   recording)
+    emitted=1
     printf '{"text":"●󰍬","tooltip":"Whistt: recording","class":""}\n'
     ;;
   finalizing)
+    emitted=1
     printf '{"text":"●󰍬","tooltip":"Whistt: transcribing","class":""}\n'
     ;;
   idle)
+    emitted=1
     printf '{"text":"󰍬","tooltip":"Whistt: idle","class":""}\n'
     ;;
   *)
-    printf '{"text":"󰍭","tooltip":"Whistt: not running","class":"active"}\n'
+    emit_not_running
     ;;
 esac

@@ -15,10 +15,12 @@ static START: OnceLock<Instant> = OnceLock::new();
 
 fn verbose() -> bool {
     *VERBOSE.get_or_init(|| {
-        matches!(
-            std::env::var("WHISTT_LOG").as_deref(),
-            Ok("debug") | Ok("trace")
-        )
+        std::env::var("WHISTT_LOG").ok().is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "debug" | "trace"
+            )
+        })
     })
 }
 
@@ -45,12 +47,7 @@ pub fn debug(message: &str) {
 /// transcript was short" and "the insertion dropped it".
 pub fn transcripts_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        matches!(
-            std::env::var("WHISTT_LOG_TRANSCRIPTS").as_deref(),
-            Ok("1") | Ok("true") | Ok("yes")
-        )
-    })
+    *ENABLED.get_or_init(|| env_flag("WHISTT_LOG_TRANSCRIPTS"))
 }
 
 /// Whether raw provider text events may be logged for protocol diagnosis.
@@ -59,10 +56,14 @@ pub fn transcripts_enabled() -> bool {
 /// separate from ordinary debug logging and disabled by default.
 pub fn provider_events_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
+    *ENABLED.get_or_init(|| env_flag("WHISTT_LOG_PROVIDER_EVENTS"))
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|value| {
         matches!(
-            std::env::var("WHISTT_LOG_PROVIDER_EVENTS").as_deref(),
-            Ok("1") | Ok("true") | Ok("yes")
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes"
         )
     })
 }

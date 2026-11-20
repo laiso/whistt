@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::config::Config;
-use crate::ipc::{Request, Response, State, decode_line, encode_line};
+use crate::ipc::{Request, Response, decode_line, encode_line};
 use crate::log;
 use crate::session::{self, Command, ControllerDeps, ControllerHandle};
 
@@ -122,7 +122,10 @@ async fn handle_connection(stream: UnixStream, controller: ControllerHandle) {
         }
         let response = match decode_line::<Request>(&line) {
             Ok(request) => controller.send(to_command(request)).await,
-            Err(error) => Response::error(State::Idle, error),
+            Err(error) => {
+                let state = controller.send(Command::Status).await.state;
+                Response::error(state, error)
+            }
         };
         match encode_line(&response) {
             Ok(encoded) => {

@@ -648,10 +648,12 @@ async fn slow_delivery_does_not_block_commands() {
         }
     }
     let output = Arc::new(SlowOutput(AtomicBool::new(false)));
+    let audio = common::FakeAudioPool::new();
+    audio.script_initial(vec![chunk(1)]);
     let transport = common::FakeTransportPool::new();
     let controller = whistt::session::spawn(whistt::session::ControllerDeps {
         config: test_config(),
-        audio: Arc::new(common::FakeAudioPool::new()),
+        audio: Arc::new(audio),
         transport: Arc::new(transport.clone()),
         output: output.clone(),
     });
@@ -682,4 +684,55 @@ async fn slow_delivery_does_not_block_commands() {
     })
     .await
     .expect("delivery blocked the controller");
+}
+
+#[tokio::test]
+async fn a_tap_shorter_than_one_hundred_milliseconds_discards_without_committing_or_notifying() {
+    let mut config = test_config();
+    config.setup_timeout = Duration::from_secs(5);
+    let harness = harness(config);
+    // 1,200 bytes = 25 ms at 24 kHz mono s16, below OpenAI's 100 ms minimum.
+    harness.audio.script_initial(vec![vec![1u8; 1_200]]);
+
+    assert_eq!(
+        harness.controller.send(Command::Start).await.state,
+        State::Recording
+    );
+    let provider = harness.transport.session(0);
+    provider.push(TranscriptEvent::Ready);
+    harness.controller.send(Command::Stop).await;
+
+    wait_for_state(&harness.controller, State::Idle).await;
+    settle().await;
+    assert_eq!(provider.commits(), 0);
+    assert!(harness.output.insert_attempts().is_empty());
+    assert!(
+        harness.output.notifications().is_empty(),
+        "a brief tap must not pop up an error notification: {:?}",
+        harness.output.notifications()
+    );
+}
+
+#[tokio::test]
+async fn a_server_error_wins_over_a_concurrent_write_failure() {
+    let mut config = test_config();
+    config.setup_timeout = Duration::from_secs(5);
+    let harness = harness(config);
+    harness
+        .transport
+        .fail_send_audio("could not send audio: Broken pipe");
+    harness.audio.script_initial(vec![chunk(1)]);
+
+    harness.controller.send(Command::Start).await;
+    let provider = harness.transport.session(0);
+    provider.push(TranscriptEvent::Ready);
+    provider.push(TranscriptEvent::Failed(
+        "model gpt-live-transcribe is not available".to_string(),
+    ));
+
+    wait_for_state(&harness.controller, State::Idle).await;
+    harness
+        .output
+        .wait_for_notification("gpt-live-transcribe is not available")
+        .await;
 }

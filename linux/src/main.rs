@@ -2,6 +2,7 @@
 
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -126,27 +127,38 @@ async fn run_daemon(config: Config) -> Result<(), String> {
     Ok(())
 }
 
+const IPC_TIMEOUT: Duration = Duration::from_secs(2);
+
 async fn request(config: &Config, request: Request) -> Result<Response, String> {
-    let stream = UnixStream::connect(&config.socket_path)
-        .await
-        .map_err(|error| {
-            format!(
-                "no daemon is listening on {} ({error}); start one with `whistt daemon`",
-                config.socket_path.display()
-            )
-        })?;
-    let (reader, mut writer) = stream.into_split();
-    writer
-        .write_all(encode_line(&request)?.as_bytes())
-        .await
-        .map_err(|error| format!("could not send the command: {error}"))?;
-    let mut lines = BufReader::new(reader).lines();
-    let line = lines
-        .next_line()
-        .await
-        .map_err(|error| format!("could not read the response: {error}"))?
-        .ok_or("the daemon closed the connection without responding")?;
-    decode_line::<Response>(&line)
+    tokio::time::timeout(IPC_TIMEOUT, async {
+        let stream = UnixStream::connect(&config.socket_path)
+            .await
+            .map_err(|error| {
+                format!(
+                    "no daemon is listening on {} ({error}); start one with `whistt daemon`",
+                    config.socket_path.display()
+                )
+            })?;
+        let (reader, mut writer) = stream.into_split();
+        writer
+            .write_all(encode_line(&request)?.as_bytes())
+            .await
+            .map_err(|error| format!("could not send the command: {error}"))?;
+        let mut lines = BufReader::new(reader).lines();
+        let line = lines
+            .next_line()
+            .await
+            .map_err(|error| format!("could not read the response: {error}"))?
+            .ok_or("the daemon closed the connection without responding")?;
+        decode_line::<Response>(&line)
+    })
+    .await
+    .map_err(|_| {
+        format!(
+            "timed out waiting for the daemon on {}",
+            config.socket_path.display()
+        )
+    })?
 }
 
 fn report(request: Request, response: Response) -> Result<(), String> {

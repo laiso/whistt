@@ -362,12 +362,24 @@ impl Actor {
                     self.abort("microphone capture stopped unexpectedly").await;
                     return;
                 }
+                let mut captured_pcm_bytes = 0usize;
                 if let Some(session) = self.session.as_mut() {
                     session.capture_ended = true;
+                    captured_pcm_bytes = session.captured_bytes & !1;
                     log::debug(&format!(
                         "{}: capture ended after {} PCM bytes",
                         session.id, session.captured_bytes
                     ));
+                }
+                if captured_pcm_bytes < CHUNK_BYTES {
+                    // OpenAI rejects `input_audio_buffer.commit` below 100 ms
+                    // (4,800 PCM16 bytes at 24 kHz mono). Matching the macOS
+                    // agent, discard brief taps quietly instead of notifying.
+                    log::info(&format!(
+                        "{id}: recording shorter than 100 ms ({captured_pcm_bytes} bytes); discarding without committing"
+                    ));
+                    self.discard();
+                    return;
                 }
                 self.finish_capture().await;
             }
@@ -502,10 +514,10 @@ impl Actor {
     /// capture has drained and every byte has been queued.
     async fn pump(&mut self) {
         let mut committed = false;
-        let mut closed = false;
         if let Some(session) = self.session.as_mut() {
             // Audio may only reach the provider once the session is configured;
             // until then it waits in `pending`, bounded by the caller's limit.
+            let mut transport_closed = false;
             if session.ready {
                 while let Some(chunk) = session.pending.pop_front() {
                     match session.transport.try_send(TransportCommand::Audio(chunk)) {
@@ -516,14 +528,18 @@ impl Actor {
                             break;
                         }
                         Err(TrySendError::Full(_)) => break,
+                        // `transport_task` drops `commands` only after enqueueing
+                        // its terminal `TransportFailed` or `TransportClosed`
+                        // event; let that event report the real cause instead of
+                        // masking it with a generic channel-closed message.
                         Err(TrySendError::Closed(_)) => {
-                            closed = true;
+                            transport_closed = true;
                             break;
                         }
                     }
                 }
             }
-            if !closed
+            if !transport_closed
                 && session.ready
                 && session.capture_ended
                 && session.pending.is_empty()
@@ -534,14 +550,9 @@ impl Actor {
                         session.committed = true;
                         committed = true;
                     }
-                    Err(TrySendError::Full(_)) => {}
-                    Err(TrySendError::Closed(_)) => closed = true,
+                    Err(TrySendError::Full(_)) | Err(TrySendError::Closed(_)) => {}
                 }
             }
-        }
-        if closed {
-            self.abort("the transcription connection closed").await;
-            return;
         }
         if committed {
             let id = self
@@ -655,6 +666,12 @@ async fn audio_task(
     let _ = events.send(Event::AudioEnded(session)).await;
 }
 
+enum ReadEnd {
+    Failed(String),
+    Closed,
+    ReceiverGone,
+}
+
 async fn transport_task(
     session: String,
     mut transport: Box<dyn TranscriptionTransport>,
@@ -686,7 +703,7 @@ async fn transport_task(
                         .await
                         .is_err()
                     {
-                        break;
+                        return ReadEnd::ReceiverGone;
                     }
                 }
                 Some(TranscriptEvent::Interim(_)) => {
@@ -695,7 +712,7 @@ async fn transport_task(
                         .await
                         .is_err()
                     {
-                        break;
+                        return ReadEnd::ReceiverGone;
                     }
                 }
                 Some(TranscriptEvent::Final(text)) => {
@@ -704,31 +721,27 @@ async fn transport_task(
                         .await
                         .is_err()
                     {
-                        break;
+                        return ReadEnd::ReceiverGone;
                     }
                 }
                 Some(TranscriptEvent::Failed(error)) => {
-                    let _ = reader_events
-                        .send(Event::TransportFailed(reader_session, error))
-                        .await;
-                    break;
+                    return ReadEnd::Failed(error);
                 }
                 None => {
-                    let _ = reader_events
-                        .send(Event::TransportClosed(reader_session))
-                        .await;
-                    break;
+                    return ReadEnd::Closed;
                 }
             }
         }
     };
 
+    let write_session = session.clone();
+    let commands_ref = &mut commands;
     let write = async move {
         // The writer drains in order, so the commit can never overtake audio.
         let mut appended_any_audio = false;
         let mut appended_chunks = 0usize;
         let mut appended_bytes = 0usize;
-        while let Some(command) = commands.recv().await {
+        while let Some(command) = commands_ref.recv().await {
             let result = match command {
                 TransportCommand::Audio(pcm) => {
                     let bytes = pcm.len();
@@ -740,32 +753,51 @@ async fn transport_task(
                     if result.is_ok() && !appended_any_audio {
                         appended_any_audio = true;
                         log::debug(&format!(
-                            "{session}: first audio append sent to the provider"
+                            "{write_session}: first audio append sent to the provider"
                         ));
                     }
                     result
                 }
                 TransportCommand::Commit => {
                     log::debug(&format!(
-                        "{session}: committing after {appended_chunks} audio chunks, {appended_bytes} PCM bytes sent"
+                        "{write_session}: committing after {appended_chunks} audio chunks, {appended_bytes} PCM bytes sent"
                     ));
                     writer.commit().await
                 }
             };
-            if let Err(error) = result {
-                let _ = events
-                    .send(Event::TransportFailed(session.clone(), error))
-                    .await;
-                break;
-            }
+            result?;
         }
         writer.close().await;
+        Ok(())
     };
+
     // Both halves belong to this task. Aborting it drops network awaits and
     // buffered commands; completion of either half also drops the other.
+    tokio::pin!(read);
+    tokio::pin!(write);
     tokio::select! {
-        _ = read => {},
-        _ = write => {},
+        outcome = &mut read => match outcome {
+            ReadEnd::Failed(error) => {
+                let _ = events.send(Event::TransportFailed(session, error)).await;
+            }
+            ReadEnd::Closed => {
+                let _ = events.send(Event::TransportClosed(session)).await;
+            }
+            ReadEnd::ReceiverGone => {}
+        },
+        result = &mut write => {
+            if let Err(write_error) = result {
+                // When a server emits an `"error"` frame and closes the socket,
+                // a concurrent send can fail with `Broken pipe` first. Poll the
+                // reader briefly so the server's error message wins when queued.
+                let error = match tokio::time::timeout(Duration::from_millis(200), &mut read).await {
+                    Ok(ReadEnd::Failed(server_error)) => server_error,
+                    Ok(ReadEnd::ReceiverGone) => return,
+                    Ok(ReadEnd::Closed) | Err(_) => write_error,
+                };
+                let _ = events.send(Event::TransportFailed(session, error)).await;
+            }
+        }
     }
 }
 
