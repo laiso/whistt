@@ -11,13 +11,14 @@ The module polls `whistt status` once a second and renders:
 | Daemon state | Display | Tooltip |
 | --- | --- | --- |
 | `idle` | microphone icon, normal color | `Whistt: idle` |
-| `recording` | microphone icon, urgent color | `Whistt: recording` |
-| `finalizing` | microphone icon, urgent color | `Whistt: transcribing` |
-| unreachable | microphone-off icon | `Whistt: not running` |
+| `recording` | filled circle + microphone icon, normal color | `Whistt: recording` |
+| `finalizing` | filled circle + microphone icon, normal color | `Whistt: transcribing` |
+| unreachable | microphone-off icon, urgent color | `Whistt: not running` |
 
-The icons are the same glyphs as the shell's built-in microphone widget;
-the urgent color is the bar's standard "active" treatment, the same one
-the microphone widget uses while the mic is live. Because the poll
+The icons are the same glyphs as the shell's built-in microphone widget.
+The shell's command modules offer only two colors -- normal and the
+urgent color (red) -- so red is reserved for the not-running state and
+recording is marked with a filled circle instead. Because the poll
 interval is one second, a state change appears in the bar within about a
 second.
 

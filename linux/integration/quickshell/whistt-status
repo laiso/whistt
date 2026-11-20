@@ -3,9 +3,11 @@
 # whistt-status - report the Whistt daemon state for the Omarchy shell bar.
 #
 # Prints one Waybar-style JSON line, the format the shell's command bar
-# modules parse: {"text": ..., "tooltip": ..., "class": ...}. The class
-# "active" renders the label in the bar's urgent color. The glyphs are the
-# microphone icons the shell's own microphone widget uses.
+# modules parse: {"text": ..., "tooltip": ..., "class": ...}. The shell
+# renders class "active" in its urgent color (red) and offers no other
+# color, so red is reserved for the not-running state. Recording is shown
+# with a filled-circle mark in the normal color instead. The glyphs are
+# the microphone icons the shell's own microphone widget uses.
 #
 # Installed copy: ~/.config/omarchy/bar/scripts/whistt-status
 # Bar module entry: see module.json in this directory.
@@ -24,15 +26,15 @@ fi
 
 case $state in
   recording)
-    printf '{"text":"󰍬","tooltip":"Whistt: recording","class":"active"}\n'
+    printf '{"text":"●󰍬","tooltip":"Whistt: recording","class":""}\n'
     ;;
   finalizing)
-    printf '{"text":"󰍬","tooltip":"Whistt: transcribing","class":"active"}\n'
+    printf '{"text":"●󰍬","tooltip":"Whistt: transcribing","class":""}\n'
     ;;
   idle)
     printf '{"text":"󰍬","tooltip":"Whistt: idle","class":""}\n'
     ;;
   *)
-    printf '{"text":"󰍭","tooltip":"Whistt: not running","class":""}\n'
+    printf '{"text":"󰍭","tooltip":"Whistt: not running","class":"active"}\n'
     ;;
 esac
