@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# whistt-status - report the Whistt daemon state for the Omarchy shell bar.
+#
+# Prints one Waybar-style JSON line, the format the shell's command bar
+# modules parse: {"text": ..., "tooltip": ..., "class": ...}. The shell
+# renders class "active" in its urgent color (red) and offers no other
+# color, so red is reserved for the not-running state. Recording is shown
+# with a filled-circle mark in the normal color instead. The glyphs are
+# the microphone icons the shell's own microphone widget uses.
+#
+# Installed copy: ~/.config/omarchy/bar/scripts/whistt-status
+# Bar module entry: see module.json in this directory.
+
+set -u
+
+emitted=0
+emit_not_running() {
+  if (( ! emitted )); then
+    emitted=1
+    printf '{"text":"󰍭","tooltip":"Whistt: not running","class":"active"}\n'
+  fi
+}
+trap emit_not_running EXIT
+
+whistt_bin=$(command -v whistt || true)
+if [[ -z $whistt_bin && -n ${HOME:-} && -x $HOME/.local/bin/whistt ]]; then
+  whistt_bin=$HOME/.local/bin/whistt
+elif [[ -z $whistt_bin && -n ${HOME:-} && -x $HOME/.cargo/bin/whistt ]]; then
+  whistt_bin=$HOME/.cargo/bin/whistt
+fi
+
+state=""
+if [[ -n $whistt_bin ]]; then
+  # Bound each poll below the 1-second bar interval: CustomCommandModule skips
+  # new ticks while the previous child is still running, so a hung socket
+  # without a timeout would freeze the bar on stale state.
+  if command -v timeout >/dev/null 2>&1; then
+    state=$(timeout 0.8s "$whistt_bin" status 2>/dev/null || true)
+  else
+    state=$("$whistt_bin" status 2>/dev/null || true)
+  fi
+fi
+
+state=${state#"${state%%[![:space:]]*}"}
+state=${state%"${state##*[![:space:]]}"}
+
+case $state in
+  recording)
+    emitted=1
+    printf '{"text":"●󰍬","tooltip":"Whistt: recording","class":""}\n'
+    ;;
+  finalizing)
+    emitted=1
+    printf '{"text":"●󰍬","tooltip":"Whistt: transcribing","class":""}\n'
+    ;;
+  idle)
+    emitted=1
+    printf '{"text":"󰍬","tooltip":"Whistt: idle","class":""}\n'
+    ;;
+  *)
+    emit_not_running
+    ;;
+esac

@@ -1,0 +1,21 @@
+[Unit]
+Description=Whistt push-to-talk dictation daemon
+Documentation=https://github.com/laiso/whistt
+# Tied to the graphical session so the daemon shares its Wayland and PipeWire
+# environment. Requires the audio stack to be up before capture starts.
+After=graphical-session.target pipewire.service wireplumber.service
+PartOf=graphical-session.target
+Requisite=graphical-session.target
+
+[Service]
+Type=simple
+# Credentials live in a private, untracked file with owner-only permissions:
+#   install -m 600 linux/integration/systemd/whistt.env.example ~/.config/whistt/env
+EnvironmentFile=%h/.config/whistt/env
+# Adjust to wherever the binary is staged for daily use.
+ExecStart=%h/.local/bin/whistt daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

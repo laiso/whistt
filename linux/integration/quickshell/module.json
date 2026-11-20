@@ -1,0 +1,8 @@
+{
+  "id": "whistt",
+  "type": "command",
+  "exec": "~/.config/omarchy/bar/scripts/whistt-status",
+  "interval": 1,
+  "text": "󰍭",
+  "tooltip": "Whistt: status unavailable"
+}
