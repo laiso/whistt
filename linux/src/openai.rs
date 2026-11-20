@@ -154,8 +154,14 @@ impl TransportReader for OpenAiReader {
 }
 
 /// The transcription session configuration, matching the macOS payload,
-/// including `turn_detection: null` for manual commit.
+/// including `turn_detection: null` for manual commit. Like the macOS side,
+/// `language` is omitted entirely when unset: the transcription API rejects
+/// an explicit null for it.
 fn session_update(model: &str, language: Option<&str>) -> String {
+    let mut transcription = serde_json::json!({ "model": model });
+    if let Some(language) = language {
+        transcription["language"] = language.into();
+    }
     serde_json::json!({
         "type": "session.update",
         "session": {
@@ -163,7 +169,7 @@ fn session_update(model: &str, language: Option<&str>) -> String {
             "audio": {
                 "input": {
                     "format": { "type": "audio/pcm", "rate": SAMPLE_RATE },
-                    "transcription": { "model": model, "language": language },
+                    "transcription": transcription,
                     "turn_detection": serde_json::Value::Null,
                 }
             }
@@ -261,7 +267,11 @@ mod tests {
             update["session"]["audio"]["input"]["transcription"]["model"],
             "gpt-transcribe"
         );
-        assert!(update["session"]["audio"]["input"]["transcription"]["language"].is_null());
+        assert!(
+            update["session"]["audio"]["input"]["transcription"]
+                .get("language")
+                .is_none()
+        );
         assert!(update["session"]["audio"]["input"]["turn_detection"].is_null());
     }
 
@@ -286,6 +296,21 @@ mod tests {
         assert_eq!(
             update["session"]["audio"]["input"]["transcription"]["language"],
             "ja"
+        );
+    }
+
+    #[test]
+    fn session_update_omits_language_for_live_transcribe_when_unset() {
+        let update: serde_json::Value =
+            serde_json::from_str(&session_update("gpt-live-transcribe", None)).unwrap();
+        assert_eq!(
+            update["session"]["audio"]["input"]["transcription"]["model"],
+            "gpt-live-transcribe"
+        );
+        assert!(
+            update["session"]["audio"]["input"]["transcription"]
+                .get("language")
+                .is_none()
         );
     }
 
